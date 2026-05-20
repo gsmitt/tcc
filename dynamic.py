@@ -76,9 +76,16 @@ def key_color(midi_note: int) -> bool:
         return "b"
     return "w"
 
-def finger_move_cost(note_prev, note_curr, finger_prev, finger_curr):
+def _curr_is_thumb_side(note_prev, note_curr, hand):
+    # For RH, the thumb (finger 1) is on the lowest-pitch key in a hand position.
+    # For LH, the geometry mirrors: the thumb is on the highest-pitch key.
+    if hand == "R":
+        return note_curr[0] < note_prev[0]
+    return note_curr[0] > note_prev[0]
+
+def finger_move_cost(note_prev, note_curr, finger_prev, finger_curr, hand="R"):
     note_span = abs(note_curr[0] - note_prev[0])
-    if note_curr[0] < note_prev[0]:
+    if _curr_is_thumb_side(note_prev, note_curr, hand):
         key = f"{finger_curr}-{finger_prev}"
         transition = f"{key_color(note_curr[0])}-{key_color(note_prev[0])}"
     else:
@@ -93,20 +100,22 @@ def finger_move_cost(note_prev, note_curr, finger_prev, finger_curr):
     return finger_combo[note_span]
 
 
-def fingering_transition_cost(prev_notes, curr_notes, prev_fingers, curr_fingers):
+def fingering_transition_cost(prev_notes, curr_notes, prev_fingers, curr_fingers, hand="R"):
     max_cost = 0
     for (n_prev, f_prev, n_curr, f_curr) in zip(prev_notes, prev_fingers, curr_notes, curr_fingers):
         if n_prev != n_curr:
-            c = finger_move_cost(n_prev, n_curr, f_prev, f_curr)
+            c = finger_move_cost(n_prev, n_curr, f_prev, f_curr, hand)
             max_cost = max(max_cost, c)
     return max_cost
 
-def chord_complexity(notes, fingers):
+def chord_complexity(notes, fingers, hand="R"):
     if len(notes) <= 1:
         return 0
 
-    # Sort by pitch (lowest to highest)
-    combined = sorted(zip(notes, fingers), key=lambda x: x[0][0])
+    # RH: sort ascending so finger_a sits on the thumb-side (lowest) note.
+    # LH: sort descending so finger_a sits on the thumb-side (highest) note.
+    # Either way, downstream logic ("first finger is thumb-side") works.
+    combined = sorted(zip(notes, fingers), key=lambda x: x[0][0], reverse=(hand == "L"))
     total_cost = 0
     max_span = abs(combined[-1][0][0] - combined[0][0][0])
 
@@ -147,8 +156,9 @@ def chord_complexity(notes, fingers):
 
 
 class PianoFingeringDFS:
-    def __init__(self, chords):
+    def __init__(self, chords, hand="R"):
         self.chords = chords
+        self.hand = hand
         self.best_cost = math.inf
         self.best_path = []
         self.node_visits = 0
@@ -181,11 +191,11 @@ class PianoFingeringDFS:
         avaliable_fingers = [x for x in range(1, 6)  if hand.is_available(x,time)]
 
         for fingers in self._possible_fingerings(len(chord["notes"]), avaliable_fingers):
-            chord_cost = chord_complexity(chord["notes"], fingers)
+            chord_cost = chord_complexity(chord["notes"], fingers, self.hand)
             if prev_notes is None:
                 move_cost = 0
             else:
-                move_cost = fingering_transition_cost(prev_notes, chord["notes"], prev_fingers, fingers)
+                move_cost = fingering_transition_cost(prev_notes, chord["notes"], prev_fingers, fingers, self.hand)
 
             if move_cost > MAX_MOVE_COST:
                 continue
