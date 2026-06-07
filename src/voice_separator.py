@@ -10,7 +10,7 @@ so the caller can map back to the original layer structure.
 """
 
 EPSILON = 1e-6
-OVERLAP_TOLERANCE = 0.05  # seconds; treat tiny overlap as legato continuation
+OVERLAP_TOLERANCE = 1 / 32  # note-value (32nd note); treat tiny overlap as legato
 
 
 def _flatten(layers):

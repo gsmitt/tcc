@@ -1,20 +1,22 @@
-from mido import MidiFile
+from mido import MidiFile, merge_tracks
 
 def read_midi_to_layers(path: str):
     """
     layer:
         {
-            "time": float,  # seconds
+            "time": float,  # note-value fraction (whole=1, quarter=0.25)
             "notes": [(note_number, end)]
         }
     """
     mid = MidiFile(path)
+    ticks_per_whole = mid.ticks_per_beat * 4
     events = []
     active_notes = {}
 
-    current_time = 0.0
-    for msg in mid:
-        current_time += msg.time
+    current_ticks = 0
+    for msg in merge_tracks(mid.tracks):
+        current_ticks += msg.time
+        current_time = current_ticks / ticks_per_whole
         if msg.type == "note_on" and msg.velocity > 0:
             active_notes[msg.note] = current_time
         elif msg.type in ("note_off", "note_on") and msg.velocity == 0:
