@@ -2,8 +2,9 @@ from src.midi_reader      import read_midi_to_layers
 from src.voice_separator  import separate_voices
 from src.hand_assigner    import assign_voices_to_hands, split_layers_by_hand
 from src.solvers          import get_solver
+from src.sheet_export     import render_fingering_pdf
 
-SLICE  = 50
+SLICE  = 100
 SOLVER = "dynamic"   # "dynamic" | "greedy" | "graph"
 
 
@@ -23,6 +24,10 @@ def main():
 
     print(f"[{SOLVER}] LH  cost={lh.cost}  visits={lh.node_visits}  extras={lh.extras}")
     print(f"[{SOLVER}] RH  cost={rh.cost}  visits={rh.node_visits}  extras={rh.extras}")
+
+    pdf = render_fingering_pdf(lh_layers, lh.path, rh_layers, rh.path,
+                               out_path="output/mond_1")
+    print(f"Wrote {pdf}")
 
 
 if __name__ == "__main__":

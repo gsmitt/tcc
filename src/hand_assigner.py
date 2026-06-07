@@ -125,6 +125,11 @@ def split_layers_by_hand(layers, hand_labels):
                 lh_notes.append((pitch, end))
             elif hand == "R":
                 rh_notes.append((pitch, end))
+        # Sort by pitch so the solver's ascending finger combinations map onto
+        # the thumb-side note: RH thumb on the lowest key, LH thumb on the
+        # highest. Keeps fingering generation consistent with chord_complexity.
+        lh_notes.sort(key=lambda ne: ne[0], reverse=True)
+        rh_notes.sort(key=lambda ne: ne[0])
         if lh_notes:
             lh_layers.append({"time": layer["time"], "notes": lh_notes})
         if rh_notes:
