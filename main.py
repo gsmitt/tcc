@@ -4,8 +4,8 @@ from src.hand_assigner    import assign_voices_to_hands, split_layers_by_hand
 from src.solvers          import get_solver
 from src.sheet_export     import render_fingering_pdf
 
-SLICE  = 100
-SOLVER = "dynamic"   # "dynamic" | "greedy" | "graph"
+SLICE  = 2000        # whole piece; the viterbi solver scales to 800+ layers
+SOLVER = "viterbi"   # "viterbi" | "dynamic" | "greedy" | "graph"
 
 
 def main():
