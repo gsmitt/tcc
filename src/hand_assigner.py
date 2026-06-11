@@ -1,110 +1,149 @@
-"""Assign voices to hands and split MIDI layers into per-hand streams.
+"""Assign every note to a hand (staff) via a register split-point.
 
-Given the voices produced by voice_separator.separate_voices, decide which
-voices go to the left hand and which to the right by enumerating all 2-way
-partitions and scoring each by per-layer playability (chord-size and span)
-plus a register-separation reward.
+The previous version assigned whole *voices* (from :mod:`src.voice_separator`)
+to a hand by their mean pitch.  That granularity produced two artefacts on
+polyphonic textures: a re-struck low pedal tone scattered across voices would
+drag a high-mean voice's outliers into the treble staff, and a chord whose notes
+landed in voices assigned to different hands was split across staves.
+
+This version decides the staff of each *note* directly, per onset, with a moving
+pitch boundary ``b`` (the "split point"): notes below ``b`` go to the left hand,
+notes at/above ``b`` to the right.  Because the left hand is always the lower
+side of ``b``, it is the lower-register hand by construction.
+
+The boundary is chosen by a Viterbi-style dynamic program over the sequence of
+onsets, minimising
+
+    sum_t emission(onset_t, b_t)  +  sum_t smooth_weight * |b_t - b_{t-1}|
+
+where ``emission``
+
+  * softly forbids a hand that exceeds the ergonomic limits -- more than
+    ``max_notes_per_hand`` keys, or a stretch wider than ``max_span_semitones``;
+  * adds a ``cohesion_penalty`` when ``b`` splits an onset whose notes would all
+    fit one hand, so tight chords and octaves stay on one staff.
+
+The ``smooth_weight`` (hysteresis) term keeps ``b`` stable from onset to onset:
+absent a feasibility/cohesion reason to move, the boundary stays put, which is
+what stops a repeated pedal tone from flip-flopping between staves.  ``b`` is
+seeded at ``seed_boundary`` (≈ middle C) so the first division is the
+conventional one; thereafter it only moves when the music forces it.  (We use a
+*seed* rather than a per-onset pull toward middle C on purpose: a standing pull
+would slowly drag the boundary up through a low arpeggio note and re-introduce
+the very staff-jumping this fixes.)
+
+Sources this is adapted from (verify exact pages before citing in the thesis):
+  * the "stay on the same hand over time" penalty is the simplified, single-
+    boundary analogue of the HMM hand-separation in Nakamura, Saito & Yoshii,
+    "Statistical Learning and Estimation of Piano Fingering", Information
+    Sciences 517 (2020);
+  * the keys-per-hand / stretch limits follow Parncutt, Sloboda, Clarke,
+    Raekallio & Desain, "An Ergonomic Model of Keyboard Fingering for Melodic
+    Fragments", Music Perception 14(4) (1997);
+  * deciding the split by pitch distance is in the spirit of the contig-
+    connection cost of Chew & Wu, "Separating Voices in Polyphonic Music: A
+    Contig Mapping Approach", CMMR (2004).
+
+A "note record" is the tuple produced by :mod:`src.voice_separator`:
+    (start_time, midi_pitch, end_time, layer_idx, note_idx_in_layer)
+Only ``midi_pitch`` and the ``(layer_idx, note_idx_in_layer)`` key are used; the
+voices merely carry the notes (grouping by ``layer_idx`` recovers the original
+onsets), so the quality of the voice separation no longer affects the staves.
 """
 
+FEAS_PENALTY = 1000.0   # soft "infeasible": exceeds keys-per-hand or stretch
 
-def _voice_stats(voice):
-    pitches = [n[1] for n in voice]
-    return {
-        "mean": sum(pitches) / len(pitches),
-        "min": min(pitches),
-        "max": max(pitches),
-    }
+
+def _onsets_from_voices(voices):
+    """Recover per-onset note lists from the flat voice note-records.
+
+    Returns ``[(layer_idx, [(pitch, note_idx), ...]), ...]`` sorted by onset,
+    each note list sorted by pitch.
+    """
+    by_layer = {}
+    for voice in voices:
+        for (_start, pitch, _end, layer_idx, note_idx) in voice:
+            by_layer.setdefault(layer_idx, []).append((pitch, note_idx))
+    return [(layer_idx, sorted(by_layer[layer_idx])) for layer_idx in sorted(by_layer)]
+
+
+def _emission(pitches, b, max_notes, max_span, cohesion_penalty):
+    """Cost of splitting one onset's ascending ``pitches`` at boundary ``b``."""
+    left = [p for p in pitches if p < b]
+    right = [p for p in pitches if p >= b]
+    cost = 0.0
+    for hand in (left, right):
+        if not hand:
+            continue
+        if len(hand) > max_notes:
+            cost += FEAS_PENALTY
+        if hand[-1] - hand[0] > max_span:
+            cost += FEAS_PENALTY
+    if left and right:                              # an actual split happened
+        fits_one = (len(pitches) <= max_notes
+                    and pitches[-1] - pitches[0] <= max_span)
+        if fits_one:                                # ...but it need not have
+            cost += cohesion_penalty
+    return cost
 
 
 def assign_voices_to_hands(voices,
                            max_notes_per_hand=5,
                            max_span_semitones=14,
-                           separation_weight=2.0):
-    """Return a dict (layer_idx, note_idx_in_layer) -> "L" | "R".
+                           smooth_weight=0.6,
+                           cohesion_penalty=8.0,
+                           seed_boundary=60.0):
+    """Return a dict ``(layer_idx, note_idx_in_layer) -> "L" | "R"``.
 
-    Every note in every voice is labelled.
+    Every note carried by ``voices`` is labelled by the split-point DP described
+    in the module docstring.
     """
-    n_voices = len(voices)
-    if n_voices == 0:
+    onsets = _onsets_from_voices(voices)
+    if not onsets:
         return {}
 
-    voice_stats = [_voice_stats(v) for v in voices]
+    pitch_lists = [[p for p, _ni in notes] for _li, notes in onsets]
+    all_pitches = [p for pl in pitch_lists for p in pl]
+    lo, hi = min(all_pitches), max(all_pitches)
+    # Half-integer candidates from just below the lowest pitch to just above the
+    # highest, so "all right" (b <= lo) and "all left" (b > hi) are reachable.
+    boundaries = [lo - 0.5 + i for i in range(hi - lo + 2)]
 
-    if n_voices == 1:
-        hand = "R" if voice_stats[0]["mean"] >= 60 else "L"
-        return {(n[3], n[4]): hand for n in voices[0]}
+    def emit(t, b):
+        return _emission(pitch_lists[t], b, max_notes_per_hand,
+                         max_span_semitones, cohesion_penalty)
 
-    # layer_notes_per_voice[v] = {layer_idx: [pitch, ...]}
-    layer_notes_per_voice = []
-    for voice in voices:
-        d = {}
-        for note in voice:
-            d.setdefault(note[3], []).append(note[1])
-        layer_notes_per_voice.append(d)
+    # Forward pass. dp[k] = best cost of reaching this onset with boundaries[k];
+    # back[t-1][k] = the previous onset's boundary index chosen to reach k here.
+    dp = [emit(0, b) + smooth_weight * abs(b - seed_boundary) for b in boundaries]
+    back = []
+    for t in range(1, len(onsets)):
+        new_dp = [0.0] * len(boundaries)
+        choice = [0] * len(boundaries)
+        for ki, b in enumerate(boundaries):
+            best_c, best_j = None, 0
+            for kj, bp in enumerate(boundaries):
+                c = dp[kj] + smooth_weight * abs(b - bp)
+                if best_c is None or c < best_c:
+                    best_c, best_j = c, kj
+            new_dp[ki] = best_c + emit(t, b)
+            choice[ki] = best_j
+        dp = new_dp
+        back.append(choice)
 
-    best_cost = float("inf")
-    best_assignment = None
-
-    # Voice 0 fixed to "L" to break the L/R relabel symmetry.
-    for bits in range(2 ** (n_voices - 1)):
-        assignment = ["L"]
-        for i in range(n_voices - 1):
-            assignment.append("R" if (bits >> i) & 1 else "L")
-        if "R" not in assignment:
-            continue
-
-        layer_pitches = {"L": {}, "R": {}}
-        for vi, hand in enumerate(assignment):
-            for lidx, pitches in layer_notes_per_voice[vi].items():
-                layer_pitches[hand].setdefault(lidx, []).extend(pitches)
-
-        feasible = True
-        span_cost = 0.0
-        for hand in ("L", "R"):
-            for pitches in layer_pitches[hand].values():
-                if len(pitches) > max_notes_per_hand:
-                    feasible = False
-                    break
-                if len(pitches) >= 2:
-                    span = max(pitches) - min(pitches)
-                    if span > max_span_semitones:
-                        feasible = False
-                        break
-                    span_cost += span
-            if not feasible:
-                break
-        if not feasible:
-            continue
-
-        lh_means = [voice_stats[vi]["mean"] for vi, h in enumerate(assignment) if h == "L"]
-        rh_means = [voice_stats[vi]["mean"] for vi, h in enumerate(assignment) if h == "R"]
-        sep = abs(sum(lh_means) / len(lh_means) - sum(rh_means) / len(rh_means))
-
-        total_cost = span_cost - separation_weight * sep
-        if total_cost < best_cost:
-            best_cost = total_cost
-            best_assignment = assignment[:]
-
-    if best_assignment is None:
-        # Every partition was infeasible. Fall back to pitch-mean split.
-        order = sorted(range(n_voices), key=lambda i: voice_stats[i]["mean"])
-        best_assignment = ["L"] * n_voices
-        for vi in order[(n_voices + 1) // 2:]:
-            best_assignment[vi] = "R"
-
-    # Make sure LH ends up the lower-register hand.
-    lh_voices = [vi for vi, h in enumerate(best_assignment) if h == "L"]
-    rh_voices = [vi for vi, h in enumerate(best_assignment) if h == "R"]
-    if lh_voices and rh_voices:
-        lh_mean = sum(voice_stats[vi]["mean"] for vi in lh_voices) / len(lh_voices)
-        rh_mean = sum(voice_stats[vi]["mean"] for vi in rh_voices) / len(rh_voices)
-        if lh_mean > rh_mean:
-            best_assignment = ["R" if h == "L" else "L" for h in best_assignment]
+    # Backtrack the optimal boundary at every onset.
+    k = min(range(len(boundaries)), key=lambda i: dp[i])
+    chosen = [0] * len(onsets)
+    chosen[-1] = k
+    for t in range(len(onsets) - 1, 0, -1):
+        k = back[t - 1][k]
+        chosen[t - 1] = k
 
     labels = {}
-    for vi, hand in enumerate(best_assignment):
-        for note in voices[vi]:
-            labels[(note[3], note[4])] = hand
+    for t, (layer_idx, notes) in enumerate(onsets):
+        b = boundaries[chosen[t]]
+        for pitch, note_idx in notes:
+            labels[(layer_idx, note_idx)] = "L" if pitch < b else "R"
     return labels
 
 
