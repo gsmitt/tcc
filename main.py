@@ -1,16 +1,19 @@
 from src.midi_reader      import read_midi_to_layers
 from src.voice_separator  import separate_voices
-from src.hand_assigner    import assign_voices_to_hands, split_layers_by_hand
+from src.assigners        import get_assigner, split_layers_by_hand
 from src.solvers          import get_solver
 from src.sheet_export     import render_fingering_pdf
 from src.sheet_reducer    import reduce_score
 
-SLICE  = 2000        # whole piece; the viterbi solver scales to 800+ layers
-SOLVER = "viterbi"   # "viterbi" | "dynamic" | "greedy" | "graph"
+SLICE    = 2000        # whole piece; the viterbi solver scales to 800+ layers
+SOLVER   = "viterbi"   # "viterbi" | "dynamic" | "greedy" | "graph"
+ASSIGNER = "joint-full"  # "split" | "joint-local" | "joint-full"
 
-REDUCE = True        # thin the score to TARGET difficulty before fingering
-TARGET = (25.0, 45.0, 65.0)   # (D_L, D_R, D_B) ergonomic-cost-density targets
-                              # calibrated on mond_1 (baseline D_B mean ~80)
+REDUCE = True        # thin the score before fingering
+TARGET = (25.0, 45.0, 65.0)   # absolute (D_L, D_R, D_B) difficulty ceilings in
+                              # ergonomic-cost-density units. Fixed/global, not
+                              # per-piece: a harder piece reduces more, an easier
+                              # one less. Choose/justify via difficulty_profile.py.
 
 
 def main():
@@ -18,15 +21,16 @@ def main():
 
     if REDUCE:
         result = reduce_score(layers, target=TARGET)
-        print(f"Reduced: -{len(result.deleted)} notes, "
-              f"{len(result.shifted)} shifted, "
+        tl, tr, tb = result.target
+        print(f"Reduced (target D_L/D_R/D_B={tl:.0f}/{tr:.0f}/{tb:.0f}): "
+              f"-{len(result.deleted)} notes, {len(result.shifted)} shifted, "
               f"Aadd={result.additional_note_rate:.0%}")
         layers = result.layers
 
     voices = separate_voices(layers)
     print(f"Voices: {len(voices)}  (sizes: {[len(v) for v in voices]})")
 
-    labels = assign_voices_to_hands(voices)
+    labels = get_assigner(ASSIGNER)(voices).assign()
     lh_layers, rh_layers = split_layers_by_hand(layers, labels)
     print(f"LH layers: {len(lh_layers)}    RH layers: {len(rh_layers)}")
 

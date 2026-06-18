@@ -38,7 +38,7 @@ within a layer after :func:`condense`).
 from dataclasses import dataclass, field
 
 from .voice_separator import separate_voices
-from .hand_assigner import assign_voices_to_hands, split_layers_by_hand
+from .assigners import get_assigner, split_layers_by_hand
 from .solvers import get_solver
 from .difficulty import note_difficulties
 
@@ -51,6 +51,7 @@ class ReduceResult:
     deleted: list = field(default_factory=list)   # [(layer_idx, pitch), ...]
     shifted: list = field(default_factory=list)    # [(layer_idx, old, new), ...]
     additional_note_rate: float = 0.0              # eq. (22)
+    target: tuple = (0.0, 0.0, 0.0)                # the (D̃_L, D̃_R, D̃_B) actually used
 
 
 def condense(layers):
@@ -106,7 +107,7 @@ def _importance(li, pitch, melody, bass, multiplicity, a):
     return h
 
 
-def _measure(layers, delta_t):
+def _measure(layers, delta_t, assigner):
     """Run the normal pipeline once to score the current score.
 
     Returns ``(labels, difficulties, lh, rh, lh_layers, rh_layers)`` where
@@ -114,7 +115,7 @@ def _measure(layers, delta_t):
     the per-onset ``(D_L, D_R, D_B)`` list aligned with ``layers``.
     """
     voices = separate_voices(layers)
-    labels = assign_voices_to_hands(voices)
+    labels = get_assigner(assigner)(voices).assign()
     lh_layers, rh_layers = split_layers_by_hand(layers, labels)
     Solver = get_solver("viterbi")
     lh = Solver(lh_layers, hand="L").solve()
@@ -163,12 +164,68 @@ def _choose_hand(diff, target):
     return "L" if dl >= dr else "R"   # both, or only D_B: hit the heavier hand
 
 
-def reduce_score(layers, target=(20.0, 20.0, 35.0), a=0.01, delta_t=1.0,
-                 max_iter=50, allow_octave_shift=True):
+def _percentile(values, p):
+    """The ``p``-th percentile (linear interpolation) of the finite ``values``.
+
+    Infinite difficulties (an onset the solver could not finger, i.e. exactly the
+    spots reduction must fix) are dropped: they exceed any finite target anyway,
+    so the baseline scale is taken from the playable material.
+    """
+    vals = sorted(v for v in values if v != float("inf"))
+    if not vals:
+        return float("inf")
+    if len(vals) == 1:
+        return float(vals[0])
+    k = (len(vals) - 1) * (p / 100.0)
+    lo = int(k)
+    hi = min(lo + 1, len(vals) - 1)
+    return vals[lo] + (vals[hi] - vals[lo]) * (k - lo)
+
+
+def difficulty_profile(layers, delta_t=1.0, assigner="split",
+                       percentiles=(50, 90, 100)):
+    """Per-onset difficulty distribution of a score, per hand and combined.
+
+    Measures the (condensed) score once and reports, for ``D_L``/``D_R``/``D_B``,
+    the ``min`` and the requested ``percentiles`` of the per-onset difficulty,
+    plus ``n_inf`` (onsets the solver could not finger at all).
+
+    The difficulty is an ergonomic-cost density in fixed units (:mod:`src.costs`),
+    so these numbers are a *piece-independent* scale: use this to choose and
+    justify an absolute :func:`reduce_score` ``target`` -- pick a ceiling once,
+    globally, and read it back here against several pieces to anchor what it
+    means (e.g. roughly which D_B counts as easy vs advanced).
+    """
+    layers, _multiplicity = condense(layers)
+    _labels, diffs, *_ = _measure(layers, delta_t, assigner)
+    out = {}
+    for name, idx in (("D_L", 0), ("D_R", 1), ("D_B", 2)):
+        vals = [d[idx] for d in diffs]
+        finite = [v for v in vals if v != float("inf")]
+        stats = {"min": min(finite) if finite else float("inf")}
+        for p in percentiles:
+            stats[f"p{int(p)}"] = _percentile(vals, p)
+        stats["n_inf"] = sum(1 for v in vals if v == float("inf"))
+        out[name] = stats
+    return out
+
+
+def reduce_score(layers, target=(25.0, 45.0, 65.0), a=0.01, delta_t=1.0,
+                 max_iter=50, allow_octave_shift=True, assigner="split"):
     """Iteratively reduce ``layers`` to the difficulty ``target`` triplet.
 
-    ``target`` is ``(D̃_L, D̃_R, D̃_B)`` in this project's ergonomic-cost-density
-    units (NOT the papers' -ln P units), so values are calibrated empirically.
+    ``target`` is an **absolute** ceiling ``(D̃_L, D̃_R, D̃_B)`` in this project's
+    ergonomic-cost-density units (:mod:`src.costs`; NOT the papers' -ln P units).
+    Those units are fixed across pieces -- the same physical hand effort yields
+    the same difficulty -- so a single global ``target`` transfers between pieces:
+    a harder piece is reduced more, an easier one less (like arranging to a fixed
+    grade).  The raw numbers are not self-explanatory, so choose/justify them with
+    :func:`difficulty_profile`, which reports a piece's difficulty distribution on
+    the same scale.
+
+    ``assigner`` names the hand assigner used to re-measure difficulty each
+    iteration (:func:`src.assigners.get_assigner`); it defaults to the fast
+    ``"split"`` because this loop runs the pipeline up to ``max_iter`` times.
     Returns a :class:`ReduceResult`.
     """
     layers, multiplicity = condense(layers)
@@ -176,7 +233,7 @@ def reduce_score(layers, target=(20.0, 20.0, 35.0), a=0.01, delta_t=1.0,
 
     for _ in range(max_iter):
         melody, bass = _skyline_bassline(layers)
-        labels, diffs, *_ = _measure(layers, delta_t)
+        labels, diffs, *_ = _measure(layers, delta_t, assigner)
 
         violated = [i for i, d in enumerate(diffs) if _overage(d, target) > 0]
         if not violated:
@@ -233,7 +290,7 @@ def reduce_score(layers, target=(20.0, 20.0, 35.0), a=0.01, delta_t=1.0,
     protected = len(melody | bass)
     aadd = (total - protected) / protected if protected else 0.0
     return ReduceResult(layers=layers, deleted=deleted, shifted=shifted,
-                        additional_note_rate=aadd)
+                        additional_note_rate=aadd, target=target)
 
 
 def _plan_edit(layers, li, pitch, hand_pitches, median, allow_octave_shift, edits):
