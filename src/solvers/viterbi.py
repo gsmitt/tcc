@@ -35,14 +35,16 @@ FREE = (0, 0, 0, 0, 0)  # release time per finger when the hand starts empty
 
 
 class ViterbiSolver(FingeringSolver):
-    def __init__(self, layers, hand="R"):
-        super().__init__(layers, hand)
+    def __init__(self, layers, hand="R", fingers=(1, 2, 3, 4, 5)):
+        super().__init__(layers, hand, fingers)
         self.node_visits = 0
         self.peak_states = 0
 
     def _available(self, held, time):
-        # mirrors HandState.is_available: finger free once its note is released
-        return [f for f in range(1, 6) if held[f - 1] <= time]
+        # mirrors HandState.is_available: finger free once its note is released.
+        # Only this hand's available fingers are candidates (missing fingers are
+        # never offered); the held tuple stays width-5, unused slots stay 0.
+        return [f for f in self.fingers if held[f - 1] <= time]
 
     def _assign(self, held, fingers, notes, query_time):
         # mirrors HandState.copy() + assign: untouched fingers keep their hold.

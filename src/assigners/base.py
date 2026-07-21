@@ -3,10 +3,16 @@
 A hand assigner decides, for every note carried by the voice partition, which
 hand plays it.  All variants return the same mapping
 
-    {(layer_idx, note_idx_in_layer): "L" | "R"}
+    {(layer_idx, note_idx_in_layer): hand.name}
 
-so they are interchangeable downstream via :func:`split_layers_by_hand`
-(re-exported from :mod:`src.assigners`).
+(``hand.name`` is ``"L"``/``"R"`` for the default two-hand config, but an
+arbitrary label for a duet/N-hand config), so they are interchangeable downstream
+via :func:`split_layers_by_hands` (re-exported from :mod:`src.assigners`).
+
+Every assigner is parameterised on an ordered list of :class:`src.hands.Hand`
+(sorted low -> high by register). The coupled ``joint-full`` assigner supports any
+number of hands -- the boundaries it places fall between consecutive hands; the
+proxy baselines (``split``, ``joint-local``) remain two-hand references.
 
 The split-point assigner (:mod:`src.assigners.split_point`) chooses the staff
 with an ergonomic *proxy* (feasibility + cohesion).  The joint assigners
@@ -25,19 +31,24 @@ release time each solver needs -- is fully recoverable from ``voices`` alone.
 
 from abc import ABC, abstractmethod
 
+from src.hands import DEFAULT_HANDS, validate
+
 
 class HandAssigner(ABC):
     """Assign every note carried by ``voices`` to a hand.
 
-    Subclasses read :attr:`voices` and implement :meth:`assign`.
+    Subclasses read :attr:`voices` and :attr:`hands` and implement :meth:`assign`.
+    ``hands`` is an ordered list of :class:`src.hands.Hand`, sorted low -> high by
+    register.
     """
 
-    def __init__(self, voices):
+    def __init__(self, voices, hands=DEFAULT_HANDS):
         self.voices = voices
+        self.hands = validate(hands)
 
     @abstractmethod
     def assign(self) -> dict:
-        """Return ``{(layer_idx, note_idx_in_layer): "L" | "R"}``."""
+        """Return ``{(layer_idx, note_idx_in_layer): hand.name}``."""
         ...
 
 

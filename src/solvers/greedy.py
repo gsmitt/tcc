@@ -18,8 +18,8 @@ MAX_THRESHOLD = 10
 
 
 class GreedySolver(FingeringSolver):
-    def __init__(self, layers, hand="R"):
-        super().__init__(layers, hand)
+    def __init__(self, layers, hand="R", fingers=(1, 2, 3, 4, 5)):
+        super().__init__(layers, hand, fingers)
         self.best_cost = math.inf
         self.best_path = []
         self.node_visits = 0
@@ -39,7 +39,7 @@ class GreedySolver(FingeringSolver):
 
         chord = self.layers[idx]
         time = chord["time"]
-        available_fingers = [x for x in range(1, 6) if hand_state.is_available(x, time)]
+        available_fingers = [x for x in self.fingers if hand_state.is_available(x, time)]
 
         for fingers in self._possible_fingerings(len(chord["notes"]), available_fingers):
             chord_cost = chord_complexity(chord["notes"], fingers, self.hand)
@@ -70,7 +70,7 @@ class GreedySolver(FingeringSolver):
 
     def solve(self) -> SolverResult:
         max_cost = 1
-        frontier = [(0, None, None, 0, [], HandState())]
+        frontier = [(0, None, None, 0, [], HandState(self.fingers))]
 
         while max_cost <= MAX_THRESHOLD:
             next_frontier = []

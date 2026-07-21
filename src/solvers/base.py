@@ -13,9 +13,10 @@ class SolverResult:
 
 
 class FingeringSolver(ABC):
-    def __init__(self, layers, hand="R"):
+    def __init__(self, layers, hand="R", fingers=(1, 2, 3, 4, 5)):
         self.layers = layers
-        self.hand = hand
+        self.hand = hand                 # "L"/"R": keyboard geometry for the cost model
+        self.fingers = tuple(fingers)    # available fingers (subset of 1..5)
 
     @abstractmethod
     def solve(self) -> SolverResult:

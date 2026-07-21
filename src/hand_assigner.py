@@ -147,11 +147,36 @@ def assign_voices_to_hands(voices,
     return labels
 
 
-def split_layers_by_hand(layers, hand_labels):
-    """Partition each layer's notes by hand label.
+def split_layers_by_hands(layers, hand_labels, hands):
+    """Partition each layer's notes by hand label, for an arbitrary set of hands.
 
-    Returns (lh_layers, rh_layers). Layers with no notes for a hand are
-    omitted from that hand's stream.
+    ``hand_labels`` maps ``(layer_idx, note_idx) -> hand.name``. Returns a dict
+    ``{hand.name: layers}``; layers with no notes for a hand are omitted from that
+    hand's stream. Each hand's notes are sorted so the solver's ascending finger
+    combinations map onto the thumb-side note: a right-side ("R") hand has the
+    thumb on its lowest key (ascending), a left-side ("L") hand on its highest
+    (descending). Keeps fingering generation consistent with ``chord_complexity``.
+    """
+    streams = {h.name: [] for h in hands}
+    side_of = {h.name: h.side for h in hands}
+    for layer_idx, layer in enumerate(layers):
+        buckets = {h.name: [] for h in hands}
+        for note_idx, (pitch, end) in enumerate(layer["notes"]):
+            name = hand_labels.get((layer_idx, note_idx))
+            if name in buckets:
+                buckets[name].append((pitch, end))
+        for name, notes in buckets.items():
+            if not notes:
+                continue
+            notes.sort(key=lambda ne: ne[0], reverse=(side_of[name] == "L"))
+            streams[name].append({"time": layer["time"], "notes": notes})
+    return streams
+
+
+def split_layers_by_hand(layers, hand_labels):
+    """Two-hand convenience wrapper: return ``(lh_layers, rh_layers)``.
+
+    Kept for callers that still expect the original "L"/"R" pair.
     """
     lh_layers = []
     rh_layers = []
@@ -164,9 +189,6 @@ def split_layers_by_hand(layers, hand_labels):
                 lh_notes.append((pitch, end))
             elif hand == "R":
                 rh_notes.append((pitch, end))
-        # Sort by pitch so the solver's ascending finger combinations map onto
-        # the thumb-side note: RH thumb on the lowest key, LH thumb on the
-        # highest. Keeps fingering generation consistent with chord_complexity.
         lh_notes.sort(key=lambda ne: ne[0], reverse=True)
         rh_notes.sort(key=lambda ne: ne[0])
         if lh_notes:

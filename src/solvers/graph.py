@@ -18,8 +18,8 @@ from .base import FingeringSolver, SolverResult
 
 
 class GraphSolver(FingeringSolver):
-    def __init__(self, layers, hand="R"):
-        super().__init__(layers, hand)
+    def __init__(self, layers, hand="R", fingers=(1, 2, 3, 4, 5)):
+        super().__init__(layers, hand, fingers)
         self.best_cost = math.inf
         self.best_path = []
         self.node_visits = 0
@@ -38,7 +38,7 @@ class GraphSolver(FingeringSolver):
 
         chord = self.layers[idx]
         time = chord["time"]
-        available_fingers = [x for x in range(1, 6) if hand_state.is_available(x, time)]
+        available_fingers = [x for x in self.fingers if hand_state.is_available(x, time)]
 
         for fingers in self._possible_fingerings(len(chord["notes"]), available_fingers):
             chord_cost = chord_complexity(chord["notes"], fingers, self.hand)
@@ -64,7 +64,7 @@ class GraphSolver(FingeringSolver):
             path.pop()
 
     def solve(self) -> SolverResult:
-        self._dfs(0, None, None, 0, [], HandState())
+        self._dfs(0, None, None, 0, [], HandState(self.fingers))
         return SolverResult(
             cost=self.best_cost,
             path=self.best_path,

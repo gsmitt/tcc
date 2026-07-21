@@ -273,10 +273,73 @@ def _render_staff(events, time_signature, accidental):
 # --------------------------------------------------------------------------- #
 # LilyPond document + compilation
 # --------------------------------------------------------------------------- #
-def _build_document(rh_music, lh_music, time_signature, key):
+def _staff_clef(hand, layers):
+    """Clef for a hand: explicit if set, else by register / median pitch."""
+    if hand.clef:
+        return hand.clef
+    pitches = [m for layer in layers for (m, _e) in layer["notes"]]
+    centre = (sum(pitches) / len(pitches)) if pitches else hand.register
+    return "treble" if centre >= 60 else "bass"
+
+
+def _build_document(staves, time_signature, key, single_group):
+    """Assemble the LilyPond document from per-staff specs (top -> bottom).
+
+    ``staves`` is a list of ``(staff_id, clef, orientation, music, group)``.
+    Staves sharing a ``group`` are wrapped in one ``PianoStaff`` (a player's grand
+    staff); ungrouped staves stand alone. ``single_group`` (no groups configured)
+    wraps every staff in a single ``PianoStaff`` -- the classic two-hand grand
+    staff, so the default output is unchanged.
+    """
     num, den = time_signature
     key_str = f"  \\key {key}\n" if key else ""
     time_str = f"\\time {num}/{den}"
+
+    defs = []
+    vars_ = []
+    for i, (staff_id, clef, orient, music, group) in enumerate(staves):
+        var = "staff" + chr(ord("A") + i)        # LilyPond ids must be letters only
+        vars_.append((var, staff_id, group))
+        defs.append(
+            f"{var} = {{\n  \\clef {clef}\n  {time_str}\n{key_str}"
+            f"  \\set fingeringOrientations = #'({orient})\n  {music}\n}}"
+        )
+
+    def staff_line(var, staff_id):
+        return f'\\new Staff = "{staff_id}" \\{var}'
+
+    if single_group:
+        body = "  \\new PianoStaff <<\n" + "".join(
+            f"    {staff_line(v, sid)}\n" for v, sid, _g in vars_
+        ) + "  >>"
+    else:
+        # group consecutive staves by their (non-None) group id into PianoStaves.
+        chunks = []
+        i = 0
+        while i < len(vars_):
+            v, sid, g = vars_[i]
+            if g is None:
+                chunks.append([vars_[i]])
+                i += 1
+            else:
+                run = [vars_[i]]
+                i += 1
+                while i < len(vars_) and vars_[i][2] == g:
+                    run.append(vars_[i])
+                    i += 1
+                chunks.append(run)
+        lines = []
+        for chunk in chunks:
+            if len(chunk) > 1 or chunk[0][2] is not None:
+                lines.append("    \\new PianoStaff <<")
+                lines += [f"      {staff_line(v, sid)}" for v, sid, _g in chunk]
+                lines.append("    >>")
+            else:
+                v, sid, _g = chunk[0]
+                lines.append(f"    {staff_line(v, sid)}")
+        body = "  \\new StaffGroup <<\n" + "\n".join(lines) + "\n  >>"
+
+    defs_str = "\n\n".join(defs)
     return f'''\\version "2.26.0"
 
 \\paper {{
@@ -288,25 +351,12 @@ def _build_document(rh_music, lh_music, time_signature, key):
   tagline = ##f
 }}
 
-right = {{
-  \\clef treble
-  {time_str}
-{key_str}  \\set fingeringOrientations = #'(up)
-  {rh_music}
-}}
-
-left = {{
-  \\clef bass
-  {time_str}
-{key_str}  \\set fingeringOrientations = #'(down)
-  {lh_music}
-}}
+{defs_str}
 
 \\score {{
-  \\new PianoStaff <<
-    \\new Staff = "RH" \\right
-    \\new Staff = "LH" \\left
-  >>
+<<
+{body}
+>>
   \\layout {{ }}
 }}
 '''
@@ -324,18 +374,28 @@ def _run_lilypond(ly_path, out_base):
     return out_base + ".pdf"
 
 
-def render_fingering_pdf(lh_layers, lh_path, rh_layers, rh_path,
+def render_fingering_pdf(hands, hand_layers, hand_paths,
                          out_path="output/score", time_signature=(4, 4),
                          key=None, accidental="sharp", run_lilypond=True):
     """Render fingered sheet music to ``<out_path>.pdf`` (and ``<out_path>.ly``).
 
-    Returns the PDF path. Set ``run_lilypond=False`` to only emit the ``.ly``.
+    ``hands`` is the ordered list of :class:`src.hands.Hand` (low -> high);
+    ``hand_layers`` and ``hand_paths`` are dicts keyed by ``hand.name`` (the
+    per-hand layer stream and the solver's fingering path). One staff is rendered
+    per hand; hands sharing a ``group`` form a player's grand staff. Returns the
+    PDF path. Set ``run_lilypond=False`` to only emit the ``.ly``.
     """
-    rh_music = _render_staff(_build_events(rh_layers, rh_path),
-                             time_signature, accidental)
-    lh_music = _render_staff(_build_events(lh_layers, lh_path),
-                             time_signature, accidental)
-    doc = _build_document(rh_music, lh_music, time_signature, key)
+    single_group = all(h.group is None for h in hands)
+    # Display top -> bottom = high register -> low.
+    staves = []
+    for hand in sorted(hands, key=lambda h: h.register, reverse=True):
+        layers = hand_layers.get(hand.name, [])
+        path = hand_paths.get(hand.name, [])
+        music = _render_staff(_build_events(layers, path), time_signature, accidental)
+        clef = _staff_clef(hand, layers)
+        orient = "up" if hand.side == "R" else "down"
+        staves.append((hand.name, clef, orient, music, hand.group))
+    doc = _build_document(staves, time_signature, key, single_group)
 
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     ly_path = out_path + ".ly"

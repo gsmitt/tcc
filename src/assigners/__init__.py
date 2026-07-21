@@ -11,7 +11,7 @@ labels) is shared and re-exported from :mod:`src.hand_assigner`.
                        Viterbi (cross-onset finger cost), the full coupling.
 """
 
-from src.hand_assigner import split_layers_by_hand
+from src.hand_assigner import split_layers_by_hand, split_layers_by_hands
 from .base import HandAssigner
 from .split_point import SplitPointAssigner
 from .joint_local import JointLocalAssigner

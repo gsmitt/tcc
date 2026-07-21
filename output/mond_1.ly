@@ -9,7 +9,7 @@
   tagline = ##f
 }
 
-right = {
+staffA = {
   \clef treble
   \time 4/4
   \set fingeringOrientations = #'(up)
@@ -84,7 +84,7 @@ right = {
     <cis-1 e-2 gis-3 cis'-5>1
 }
 
-left = {
+staffB = {
   \clef bass
   \time 4/4
   \set fingeringOrientations = #'(down)
@@ -160,9 +160,11 @@ left = {
 }
 
 \score {
+<<
   \new PianoStaff <<
-    \new Staff = "RH" \right
-    \new Staff = "LH" \left
+    \new Staff = "R" \staffA
+    \new Staff = "L" \staffB
   >>
+>>
   \layout { }
 }

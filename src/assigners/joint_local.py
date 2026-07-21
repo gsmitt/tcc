@@ -26,39 +26,49 @@ cost is this work's contribution.
 from itertools import combinations
 
 from src.costs import chord_complexity
+from src.hands import DEFAULT_HANDS
 from .base import HandAssigner, onsets_with_release
 
 FEAS_PENALTY = 1000.0   # a hand that cannot hold the notes (more than five keys)
 
 
-def _hand_cost(notes, hand):
+def _hand_cost(notes, side, fingers):
     """Cheapest ``chord_complexity`` over finger assignments for one hand.
 
     ``notes`` is a list of ``(pitch, end)``. Empty hand costs 0; a hand needing
-    more than five fingers is infeasible.
+    more keys than it has available fingers is infeasible.
     """
     n = len(notes)
     if n == 0:
         return 0.0
-    if n > 5:
+    if n > len(fingers):
         return FEAS_PENALTY
-    best = min(chord_complexity(notes, fingers, hand)
-               for fingers in combinations(range(1, 6), n))
+    best = min(chord_complexity(notes, fg, side)
+               for fg in combinations(fingers, n))
     return float(best)
 
 
 class JointLocalAssigner(HandAssigner):
-    def __init__(self, voices,
+    """Two-hand baseline (proxy for the coupled :class:`JointFullAssigner`)."""
+
+    def __init__(self, voices, hands=DEFAULT_HANDS,
                  smooth_weight=0.6,
-                 seed_boundary=60.0):
-        super().__init__(voices)
+                 seed_boundary=None):
+        super().__init__(voices, hands)
+        if len(self.hands) != 2:
+            raise ValueError("joint-local is a two-hand baseline; use joint-full "
+                             "for more than two hands")
         self.smooth_weight = smooth_weight
-        self.seed_boundary = seed_boundary
+        # seed the boundary at the midpoint of the two hands' registers
+        self.seed_boundary = (seed_boundary if seed_boundary is not None
+                              else (self.hands[0].register + self.hands[1].register) / 2.0)
 
     def assign(self) -> dict:
         onsets = onsets_with_release(self.voices)
         if not onsets:
             return {}
+
+        low, high = self.hands             # sorted low -> high by register
 
         # notes per onset as (pitch, end), ascending by pitch (onsets already are)
         note_lists = [[(p, e) for p, e, _ni in notes] for _li, _t, notes in onsets]
@@ -76,7 +86,8 @@ class JointLocalAssigner(HandAssigner):
                 notes = note_lists[t]
                 left = [ne for ne in notes if ne[0] < b]
                 right = [ne for ne in notes if ne[0] >= b]
-                emit_cache[key] = _hand_cost(left, "L") + _hand_cost(right, "R")
+                emit_cache[key] = (_hand_cost(left, low.side, low.fingers)
+                                   + _hand_cost(right, high.side, high.fingers))
             return emit_cache[key]
 
         # Forward pass. dp[k] = best cost of reaching this onset with boundaries[k];
@@ -110,5 +121,5 @@ class JointLocalAssigner(HandAssigner):
         for t, (layer_idx, _start, notes) in enumerate(onsets):
             b = boundaries[chosen[t]]
             for pitch, _end, note_idx in notes:
-                labels[(layer_idx, note_idx)] = "L" if pitch < b else "R"
+                labels[(layer_idx, note_idx)] = low.name if pitch < b else high.name
         return labels
