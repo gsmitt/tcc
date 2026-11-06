@@ -93,7 +93,8 @@ within a layer after :func:`condense`).
 
 from dataclasses import dataclass, field
 
-from .assigners import get_assigner, split_layers_by_hand
+from .assigners import get_assigner, split_layers_by_hands
+from .hands import DEFAULT_HANDS, validate
 from .solvers import get_solver
 from .difficulty import DEFAULT_DELTA_T, note_difficulties, window_whole_notes
 
@@ -198,29 +199,57 @@ def _importance(li, pitch, melody, bass, multiplicity, a):
     return h
 
 
-def _measure(layers, delta_t, assigner, bpm):
+def _two_hands(hands):
+    """Return ``(left, right)``: the reducer's two hands, by side.
+
+    The difficulty is the triplet ``(D_L, D_R, D_B)`` of one player's two hands,
+    so the reducer takes exactly two hands, one per side.  Each may have any set
+    of fingers: a hand without a finger is measured with the fingers it has, and
+    the same absolute ceiling then asks for an easier score than it would of a
+    complete hand.  More than two hands (a duet) is not handled here.
+    """
+    hands = validate(hands)
+    sides = sorted(h.side for h in hands)
+    if len(hands) != 2 or sides != ["L", "R"]:
+        raise ValueError("the reducer measures one player's two hands (one 'L', "
+                         "one 'R'); fingers may be missing, but duets and other "
+                         f"hand sets are not supported (got {len(hands)} hands, "
+                         f"sides {sides})")
+    left = next(h for h in hands if h.side == "L")
+    right = next(h for h in hands if h.side == "R")
+    return left, right
+
+
+def _measure(layers, delta_t, assigner, bpm, hands=DEFAULT_HANDS):
     """Run the normal pipeline once to score the current score.
 
     Returns ``(labels, difficulties, lh, rh, lh_layers, rh_layers)`` where
-    ``labels`` maps ``(layer_idx, note_idx) -> "L"|"R"`` and ``difficulties`` is
-    the per-onset ``(D_L, D_R, D_B)`` list aligned with ``layers``.
+    ``labels`` maps ``(layer_idx, note_idx) -> "L"|"R"`` (the side of the hand
+    the note went to) and ``difficulties`` is the per-onset ``(D_L, D_R, D_B)``
+    list aligned with ``layers``.
 
-    ``bpm`` is the tempo to measure at -- for the reduction loop, the score's
-    tempo already multiplied by the current tempo factor -- and ``delta_t`` the
-    difficulty window in seconds.  Only the difficulty read-out depends on either:
-    the assignment and the fingering are tempo-free.
+    ``hands`` is the player's two hands (:func:`_two_hands`); the assigner and the
+    fingering both use the fingers each hand has.  ``bpm`` is the tempo to
+    measure at -- for the reduction loop, the score's tempo already multiplied by
+    the current tempo factor -- and ``delta_t`` the difficulty window in seconds.
+    Only the difficulty read-out depends on either: the assignment and the
+    fingering are tempo-free.
     """
-    labels = get_assigner(assigner)(layers).assign()
-    lh_layers, rh_layers = split_layers_by_hand(layers, labels)
+    left, right = _two_hands(hands)
+    by_name = get_assigner(assigner)(layers, hands=(left, right)).assign()
+    streams = split_layers_by_hands(layers, by_name, (left, right))
+    lh_layers, rh_layers = streams[left.name], streams[right.name]
+    side_of = {left.name: "L", right.name: "R"}
+    labels = {k: side_of[v] for k, v in by_name.items()}
     Solver = get_solver("viterbi")
-    lh = Solver(lh_layers, hand="L").solve()
-    rh = Solver(rh_layers, hand="R").solve()
+    lh = Solver(lh_layers, hand="L", fingers=left.fingers).solve()
+    rh = Solver(rh_layers, hand="R", fingers=right.fingers).solve()
     diffs = note_difficulties(layers, lh_layers, lh.path, rh_layers, rh.path,
                               bpm=bpm, delta_t=delta_t)
 
-    # A hand whose Viterbi search failed (a chord needs more than five free
-    # fingers) yields an empty path and a spurious zero difficulty there; force
-    # that onset over target so the loop edits it.
+    # A hand whose Viterbi search failed (a chord needs more free fingers than
+    # the hand has) yields an empty path and a spurious zero difficulty there;
+    # force that onset over target so the loop edits it.
     for res, hand in ((lh, "L"), (rh, "R")):
         if res.cost == float("inf"):
             fi = res.extras.get("failed_at", 0)
@@ -278,7 +307,7 @@ def _percentile(values, p):
 
 
 def difficulty_profile(layers, *, bpm, delta_t=DEFAULT_DELTA_T, assigner="joint-local",
-                       percentiles=(50, 90, 100)):
+                       percentiles=(50, 90, 100), hands=DEFAULT_HANDS):
     """Per-onset difficulty distribution of a score, per hand and combined.
 
     Measures the (condensed) score once and reports, for ``D_L``/``D_R``/``D_B``,
@@ -295,7 +324,7 @@ def difficulty_profile(layers, *, bpm, delta_t=DEFAULT_DELTA_T, assigner="joint-
     one scale is meaningless on another.
     """
     layers, _multiplicity = condense(layers)
-    _labels, diffs, *_ = _measure(layers, delta_t, assigner, bpm)
+    _labels, diffs, *_ = _measure(layers, delta_t, assigner, bpm, hands)
     out = {}
     for name, idx in (("D_L", 0), ("D_R", 1), ("D_B", 2)):
         vals = [d[idx] for d in diffs]
@@ -311,8 +340,14 @@ def difficulty_profile(layers, *, bpm, delta_t=DEFAULT_DELTA_T, assigner="joint-
 def reduce_score(layers, target=DEFAULT_TARGET, *, bpm, a=0.01,
                  delta_t=DEFAULT_DELTA_T, max_iter=50, allow_octave_shift=True,
                  allow_tempo_reduction=True, tempo_floor=DEFAULT_TEMPO_FLOOR,
-                 tempo_step=DEFAULT_TEMPO_STEP, assigner="joint-local"):
+                 tempo_step=DEFAULT_TEMPO_STEP, assigner="joint-local",
+                 hands=DEFAULT_HANDS):
     """Iteratively reduce ``layers`` to the difficulty ``target`` triplet.
+
+    ``hands`` is the player's two hands, one per side, each with the fingers it
+    has (:func:`_two_hands`): the difficulty, and therefore the reduction, is
+    measured for those hands, so a hand without a finger gets a score reduced to
+    the same ceiling *for that hand*.
 
     ``target`` is an **absolute** ceiling ``(D̃_L, D̃_R, D̃_B)`` in this project's
     ergonomic cost per second (:mod:`src.costs` over the :mod:`src.difficulty`
@@ -348,6 +383,7 @@ def reduce_score(layers, target=DEFAULT_TARGET, *, bpm, a=0.01,
                          f"is not declared valid below it (module docstring)")
     if not 0.0 < tempo_step <= 1.0:
         raise ValueError(f"tempo_step must be in (0, 1], got {tempo_step!r}")
+    hands = _two_hands(hands)
 
     layers, multiplicity = condense(layers)
     deleted, shifted = [], []
@@ -356,7 +392,7 @@ def reduce_score(layers, target=DEFAULT_TARGET, *, bpm, a=0.01,
     for _ in range(max_iter):
         melody, bass = _skyline_bassline(layers)
         labels, diffs, *_ = _measure(layers, delta_t, assigner,
-                                     bpm * tempo_factor)
+                                     bpm * tempo_factor, hands)
 
         violated = [i for i, d in enumerate(diffs) if _overage(d, target) > 0]
         if not violated:

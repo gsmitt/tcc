@@ -18,8 +18,8 @@ ASSIGNER = "joint-full"  # "split" | "joint-local" | "joint-full"
 #        Hand("S-R","R",register=53.0,group="Secondo"),
 #        Hand("P-L","L",register=67.0,group="Primo"),
 #        Hand("P-R","R",register=79.0,group="Primo")]
-# NB: REDUCE is a two-hand difficulty preprocessor; set it False for non-default
-# hand configs (it does not yet account for missing fingers or >2 hands).
+# NB: REDUCE measures one player's two hands, each with the fingers it has, so it
+# works with missing fingers; set it False for more than two hands (a duet).
 HANDS = DEFAULT_HANDS
 
 REDUCE = True        # thin the score before fingering
@@ -44,7 +44,7 @@ def main():
         # joint-local measures difficulty inside the reduction loop: ~20x faster
         # than joint-full, which agrees with it on ~92% of notes (mond_1).
         result = reduce_score(layers, target=TARGET, bpm=tempo.bpm,
-                              assigner="joint-local")
+                              assigner="joint-local", hands=HANDS)
         tl, tr, tb = result.target
         print(f"Reduced (target D_L/D_R/D_B={tl:.0f}/{tr:.0f}/{tb:.0f}): "
               f"-{len(result.deleted)} notes, {len(result.shifted)} shifted, "

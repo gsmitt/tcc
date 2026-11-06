@@ -507,6 +507,7 @@ def run_selftest():
     check_viterbi_exact()
     check_unfingerable_first_layer()
     check_duet_end_to_end()
+    check_reduce_missing_finger()
     check_pig_identity()
 
 
@@ -691,6 +692,43 @@ def check_duet_end_to_end(midi_path="data/mond_1.mid", n_layers=60):
             ly = fh.read()
     assert ly.count("PianoStaff") == 2, "expected one grand staff per player"
     print("OK: four-hand duet (one three-finger hand) runs end to end")
+
+
+def check_reduce_missing_finger(midi_path="data/mond_1.mid", n_layers=60):
+    """The reducer measures the hands it is given, fingers missing or not.
+
+    A right hand with only fingers 1-3 must be reduced to the same ceiling with
+    those fingers alone: no onset left above it and no other finger used.  A
+    duet is refused: the difficulty triplet belongs to one player's two hands.
+    """
+    if not os.path.exists(midi_path):
+        print(f"skip: reducer check needs {midi_path}")
+        return
+    from src.sheet_reducer import _measure
+    layers, tempo = read_midi(midi_path)
+    layers = layers[:n_layers]
+    full = reduce_score(layers, bpm=tempo.bpm)
+    hands = [Hand("L", "L", register=53.0),
+             Hand("R", "R", fingers=(1, 2, 3), register=67.0)]
+    red = reduce_score(layers, bpm=tempo.bpm, hands=hands)
+    _labels, diffs, _lh, rh, _lhl, _rhl = _measure(
+        red.layers, DEFAULT_DELTA_T, "joint-local", tempo.bpm * red.tempo_factor, hands)
+    used = {f for _notes, fs in rh.path for f in fs}
+    assert used <= {1, 2, 3}, f"three-finger hand used fingers {used}"
+    tl, tr, tb = DEFAULT_TARGET
+    assert all(dl <= tl and dr <= tr and db <= tb for dl, dr, db in diffs), \
+        "reduced score left above the ceiling for the three-finger hand"
+    duet = [Hand("S-L", "L", register=41.0), Hand("S-R", "R", register=53.0),
+            Hand("P-L", "L", register=67.0), Hand("P-R", "R", register=79.0)]
+    try:
+        reduce_score(layers, bpm=tempo.bpm, hands=duet)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("the reducer should refuse four hands")
+    print(f"OK: reducer with a three-finger right hand ({len(red.deleted)} deleted, "
+          f"{len(red.shifted)} shifted vs {len(full.deleted)}/{len(full.shifted)} "
+          f"for a full hand); duet refused")
 
 
 # --------------------------------------------------------------------------- #

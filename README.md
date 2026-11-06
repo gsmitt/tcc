@@ -121,7 +121,6 @@ Uma mão direita sem o anelar:
 ```python
 HANDS = [Hand("L", "L", register=53.0),
          Hand("R", "R", fingers=(1, 2, 3, 5), register=67.0)]
-REDUCE = False
 ```
 
 Um dueto a quatro mãos:
@@ -135,10 +134,11 @@ REDUCE = False
 ASSIGNER = "joint-full"
 ```
 
-Com qualquer configuração diferente das duas mãos completas, use `REDUCE = False`: a redução
-ainda mede a dificuldade com duas mãos de cinco dedos. Mais de duas mãos exige
-`ASSIGNER = "joint-full"`, e dedos ausentes exigem uma das variantes acopladas (`joint-local`
-ou `joint-full`).
+A redução aceita mãos com dedos ausentes: mede a dificuldade com os dedos que cada mão
+tem, e o mesmo teto pede, para uma mão incompleta, uma partitura mais simples. Com mais de
+duas mãos, use `REDUCE = False`, porque a redução mede as duas mãos de um único
+executante. Mais de duas mãos exige `ASSIGNER = "joint-full"`, e dedos ausentes exigem
+uma das variantes acopladas (`joint-local` ou `joint-full`).
 
 ## Medir a dificuldade: `difficulty_profile.py`
 
