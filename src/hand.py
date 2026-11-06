@@ -1,14 +1,11 @@
 class HandState:
-    def __init__(self):
-        # Para cada dedo (1 a 5), guarda:
+    def __init__(self, fingers=(1, 2, 3, 4, 5)):
+        # Para cada dedo disponível, guarda:
         #  - nota que está pressionando (ou None)
         #  - instante de liberação (0 se livre)
+        # ``fingers`` é um subconjunto de 1..5 (uma mão pode ter dedos faltando).
         self.fingers = {
-            1: {"note": None, "release_time": 0},
-            2: {"note": None, "release_time": 0},
-            3: {"note": None, "release_time": 0},
-            4: {"note": None, "release_time": 0},
-            5: {"note": None, "release_time": 0},
+            f: {"note": None, "release_time": 0} for f in fingers
         }
 
     def is_available(self, finger, current_time):
@@ -24,7 +21,7 @@ class HandState:
 
     def copy(self):
         # para DFS, precisa clonar o estado da mão antes de ramificar
-        new_hand = HandState()
+        new_hand = HandState(self.fingers.keys())
         for f in self.fingers:
             new_hand.fingers[f] = self.fingers[f].copy()
         return new_hand
