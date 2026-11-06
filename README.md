@@ -61,8 +61,6 @@ A atribuição de mãos tem três variantes, que vão da decisão separada à de
 - **[LilyPond](https://lilypond.org)** (testado com 2.26), no `PATH`, para gerar o PDF da
   partitura. O arquivo `.ly` gerado declara a versão 2.26.
 
-O resto do código usa só a biblioteca padrão do Python.
-
 ```bash
 git clone https://github.com/gsmitt/tcc.git
 cd tcc
