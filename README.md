@@ -18,7 +18,6 @@ mãos.
 - [Dedilhar uma peça](#dedilhar-uma-peça-mainpy)
 - [Medir a dificuldade](#medir-a-dificuldade-difficulty_profilepy)
 - [Avaliação e testes](#avaliação-e-testes-evaluatepy)
-- [O conjunto de dados PIG](#o-conjunto-de-dados-pig)
 - [Organização do código](#organização-do-código)
 - [Referências](#referências)
 
@@ -162,9 +161,6 @@ python evaluate.py <modo> [opções]
 | Modo | O que faz |
 |---|---|
 | `selftest` | Testes automáticos em exemplos pequenos (abaixo) |
-| `pig` | Dedilha as peças do PIG e compara com os pianistas |
-| `agreement` | Compara os pianistas do PIG entre si, a referência humana |
-| `compare` | Compara duas execuções de `pig`, peça a peça |
 | `ablation` | Cruza redução, variante de atribuição e busca num arquivo MIDI |
 | `beamgap` | Mede quanto a busca em feixe do `joint-full` perde para a busca exata |
 
@@ -191,45 +187,10 @@ Os testes conferem, entre outras coisas:
 - que um acorde impossível já no primeiro instante falha de forma controlada;
 - um dueto a quatro mãos, com uma das mãos limitada a três dedos, do início ao fim.
 
-Se o PIG estiver na pasta padrão, um último teste confere que o dedilhado do primeiro pianista,
-passado pelo mesmo caminho de uma execução real, acerta 100% contra ele mesmo. Sem o PIG, esse
+Um último teste depende de um conjunto de dados que não acompanha o repositório; sem ele, o
 teste é pulado e os outros rodam normalmente.
 
-### No conjunto PIG
-
-```bash
-python evaluate.py pig [pasta/FingeringFiles] [--assigner joint-full] [--limits tcc] [--remove-finger R4] [--repeats 1] [--out output/eval_pig]
-```
-
-- `--assigner` aceita as três variantes e duas referências: `fixed`, que divide as mãos no dó
-  central, e `oracle`, que recebe as mãos do primeiro pianista e só calcula os dedos (a mesma
-  condição dos métodos de Nakamura, Saito e Yoshii, 2020);
-- `--limits parncutt` troca os limites de abertura dos pares com o polegar pelos do artigo
-  original;
-- `--remove-finger R4` tira um dedo de uma mão (aqui, o anelar da direita) e exige uma variante
-  acoplada;
-- `--repeats` repete cada peça e registra a mediana do tempo.
-
-Para cada peça, a tabela traz as quatro taxas de correspondência de Nakamura, Saito e Yoshii
-(2020), calculadas só sobre o número do dedo (`M_gen`, `M_high`, `M_soft`, `M_rec`) e sobre o
-dedo com a mão (`S_*`). Traz também a acurácia de mão, a fração de notas com dedilhado
-(`coverage`), o custo total e o tempo. As notas de uma mão que a busca não conseguiu dedilhar
-contam como erro, para que todas as variantes sejam medidas sobre as mesmas notas.
-
-Para comparar duas variantes peça a peça:
-
-```bash
-python evaluate.py pig --assigner split      --out output/pig_split
-python evaluate.py pig --assigner joint-full --out output/pig_joint-full
-python evaluate.py compare output/pig_split.json output/pig_joint-full.json [--subset test-30]
-```
-
-O `compare` mostra, para cada medida, a diferença média com intervalo de confiança de 95%
-(bootstrap), quantas peças melhoraram e quantas pioraram, e o teste de postos sinalizados de
-Wilcoxon, com os valores-p ajustados por Holm. `--subset test-30` restringe a comparação às 30
-peças do conjunto de teste de Nakamura, Saito e Yoshii (2020).
-
-### Num arquivo MIDI
+### Experimentos
 
 ```bash
 python evaluate.py ablation [arquivo.mid] [--slice 120] [--max-dfs 80]
@@ -241,22 +202,6 @@ as primeiras `--slice` camadas e pula essas buscas quando a parte de uma mão pa
 `--max-dfs` camadas. O `beamgap` compara o `joint-full` com e sem o feixe em trechos curtos
 (`--length` instantes, um a cada `--stride`), porque a busca sem feixe também é exponencial.
 
-## O conjunto de dados PIG
-
-O PIG (Nakamura, Saito e Yoshii, 2020) reúne trechos de 150 peças dedilhados por pianistas. Ele
-**não acompanha este repositório** e precisa ser baixado no
-[site do conjunto](http://beam.kisarazu.ac.jp/research/PianoFingeringDataset/). O uso é
-permitido **só para pesquisa acadêmica sem fins lucrativos**, e os autores pedem que o artigo
-seja citado:
-
-> E. Nakamura, Y. Saito e K. Yoshii. Statistical learning and estimation of piano fingering.
-> *Information Sciences*, v. 517, p. 68-85, 2020.
-
-O `evaluate.py` procura o conjunto em
-`PianoFingeringDataset_v1.2/PianoFingeringDataset_v1.2/FingeringFiles`, a partir da raiz do
-repositório. Se ele estiver em outro lugar, passe o caminho da pasta `FingeringFiles` como
-argumento dos modos `pig` e `agreement`. Essa pasta fica fora do git (`.gitignore`).
-
 ## Organização do código
 
 ```
@@ -266,7 +211,7 @@ evaluate.py               avaliação, experimentos e testes
 data/mond_1.mid           peça de exemplo
 src/
   midi_reader.py          leitura do MIDI: camadas e andamento
-  pig_loader.py           leitura do PIG
+  pig_loader.py           leitura do conjunto de dedilhados PIG (Nakamura, Saito e Yoshii, 2020)
   hands.py                descrição das mãos (lado, dedos, registro, executante)
   costs.py                modelo de custo ergonômico (tabelas e limites de abertura)
   hand.py                 estado dos dedos durante a busca
