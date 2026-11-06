@@ -22,24 +22,30 @@ A trellis state at an onset is ``(b_tuple, hand_subs)``:
   * ``hand_subs`` -- one ``(fingers, held)`` per band, exactly the fingering
                      Viterbi state (:mod:`src.solvers.viterbi`): ``fingers`` the
                      tuple assigned to that band's notes and ``held`` a 5-tuple of
-                     per-finger release times, clamped against the next onset so
-                     functionally identical states merge.  Each band uses its
+                     per-finger ``(release time, pitch)``, clamped against the next
+                     onset so functionally identical states merge.  Each band uses its
                      hand's ``side`` (keyboard geometry) and available ``fingers``
                      (so a hand with missing fingers never offers them).
 
-The step cost adds, for each band, ``chord_complexity`` +
-``fingering_transition_cost`` (the same two terms the solvers minimise), plus the
+The step cost adds, for each band, ``chord_complexity`` + ``held_reach_cost`` +
+``fingering_transition_cost`` (the same terms the solvers minimise), plus the
 boundary hysteresis ``smooth_weight * sum_j |b_j - b_j_prev|``.  Each boundary is
 seeded at the midpoint of its two adjacent hands' registers.
 
 Tractability.  A ``beam`` keeps only the K cheapest states per onset, and a
 ``boundary_window`` restricts each ``b_j`` to within W semitones of its previous
-value (its seed at the first onset).  Only the boundary path is returned -- the
+value (its seed at the first onset).  Back-pointers are kept only for the states
+that survive the beam: a pruned state can never lie on the returned path, and
+storing every generated state made memory grow with the number of candidates
+(over 3 GB on a four-hand chordal excerpt).  The search is linear in the number
+of onsets; what grows quickly is the number of candidate states per onset, which
+is the product of the boundary tuples and of every band's fingerings.  Only the boundary path is returned -- the
 fingering computed here scores the split and is then discarded, leaving the
 downstream per-hand solver (the same Viterbi) to produce the published fingering,
 so the pipeline contract is unchanged.
 
-Cost model: Parncutt et al. 1997 (via :mod:`src.costs`); hand separation in the
+Cost model: Hart, Bosch & Tsai 2000 (move costs) and Parncutt et al. 1997
+(span limits), both via :mod:`src.costs`; hand separation in the
 spirit of the HMM of Nakamura, Saito & Yoshii, Information Sciences 517 (2020).
 """
 
@@ -52,11 +58,12 @@ from src.costs import (
     MAX_MOVE_COST_HARD,
     chord_complexity,
     fingering_transition_cost,
+    held_reach_cost,
 )
 from src.hands import DEFAULT_HANDS
 from .base import HandAssigner, onsets_with_release
 
-FREE = (0, 0, 0, 0, 0)   # release time per finger when a hand starts empty
+FREE = ((0, 0),) * 5     # (release time, pitch) per finger when a hand starts empty
 
 
 @lru_cache(maxsize=None)
@@ -70,7 +77,7 @@ def _chord_cost(notes, fingers, hand):
 def _available(held, time, fingers):
     # mirrors HandState.is_available: a finger is free once its note is released.
     # Only this hand's fingers are candidates (missing fingers never offered).
-    return [f for f in fingers if held[f - 1] <= time]
+    return [f for f in fingers if held[f - 1][0] <= time]
 
 
 def _assign(held, fingers, notes, query_time):
@@ -79,22 +86,23 @@ def _assign(held, fingers, notes, query_time):
     # to merge functionally-identical states.
     new_held = list(held)
     for f, note in zip(fingers, notes):
-        new_held[f - 1] = note[1]            # note = (pitch, release_time)
-    return tuple(r if r > query_time else 0 for r in new_held)
+        new_held[f - 1] = (note[1], note[0])  # note = (pitch, release_time)
+    return tuple(h if h[0] > query_time else (0, 0) for h in new_held)
 
 
 class JointFullAssigner(HandAssigner):
-    def __init__(self, voices, hands=DEFAULT_HANDS,
+    def __init__(self, layers, hands=DEFAULT_HANDS,
                  smooth_weight=0.6,
                  beam=32,
                  boundary_window=6):
-        super().__init__(voices, hands)
+        super().__init__(layers, hands)
         self.smooth_weight = smooth_weight
         self.beam = beam
         self.boundary_window = boundary_window
+        self.total_cost = 0.0            # set by assign(); 0 for trivial inputs
 
     def assign(self) -> dict:
-        onsets = onsets_with_release(self.voices)
+        onsets = onsets_with_release(self.layers)
         if not onsets:
             return {}
 
@@ -165,6 +173,7 @@ class JointFullAssigner(HandAssigner):
             Branches whose transition exceeds the hard limit are pruned.
             """
             available = _available(held, time, fingers)
+            still_held = [(p, f) for f, (r, p) in enumerate(held, start=1) if r > time]
             n = len(notes)
             if n > len(available):
                 return                              # hand cannot hold this onset
@@ -177,8 +186,13 @@ class JointFullAssigner(HandAssigner):
                         prev_notes, notes, prev_fingers, fg, side)
                     if move > MAX_MOVE_COST_HARD:
                         continue
-                cost = _chord_cost(notes_t, fg, side) + move
-                yield fg, cost, _assign(held, fg, notes, next_time)
+                reach, released = held_reach_cost(still_held, notes, fg, side)
+                cost = _chord_cost(notes_t, fg, side) + move + reach
+                new_held = _assign(held, fg, notes, next_time)
+                if released:   # a note let go early frees its finger
+                    new_held = tuple((0, 0) if f in released else h
+                                     for f, h in enumerate(new_held, start=1))
+                yield fg, cost, new_held
 
         def expand(b_tuple, bands, prev_bands, prev_subs):
             """Yield ``(hand_subs, cost)`` over the product of per-band fingerings.
@@ -214,8 +228,9 @@ class JointFullAssigner(HandAssigner):
                 total = base + cost
                 if total < dp.get(state, math.inf):
                     dp[state] = total
-                    parent[(0, state)] = None
         dp = self._beam(dp)
+        for state in dp:
+            parent[(0, state)] = None
 
         for t in range(1, len(onsets)):
             time = times[t]
@@ -223,6 +238,7 @@ class JointFullAssigner(HandAssigner):
             prev_notes = note_lists[t - 1]
             prev_cut = cuts[t - 1]
             next_dp = {}
+            back = {}                        # state -> predecessor, this onset only
             for (pb_tuple, psubs), pcost in dp.items():
                 prev_bands = bands_of(prev_notes, prev_cut, pb_tuple)
                 for b_tuple in b_tuples(pb_tuple):
@@ -234,14 +250,21 @@ class JointFullAssigner(HandAssigner):
                         total = pcost + smooth + cost
                         if total < next_dp.get(state, math.inf):
                             next_dp[state] = total
-                            parent[(t, state)] = (pb_tuple, psubs)
+                            back[state] = (pb_tuple, psubs)
             if not next_dp:
                 # No playable continuation at all (every split needs more fingers
                 # than free). Fall back to the boundaries chosen so far.
+                self.total_cost = math.inf
                 return self._labels(onsets, boundaries,
                                     self._backtrack(dp, parent, t - 1), tail_from=t)
             dp = self._beam(next_dp)
+            for state in dp:                 # keep back-pointers of survivors only
+                parent[(t, state)] = back[state]
 
+        # Cost of the best joint (boundaries + fingering) path found; with
+        # beam=None this is the exact optimum under the boundary window, which is
+        # what ``evaluate.py beamgap`` compares the beamed run against.
+        self.total_cost = min(dp.values())
         chosen = self._backtrack(dp, parent, len(onsets) - 1)
         return self._labels(onsets, boundaries, chosen)
 

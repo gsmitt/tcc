@@ -22,6 +22,11 @@ output can be looked up by.
 
 Times are the performance times in seconds; the pipeline only uses them for
 relative onset/release order (held-finger availability), so seconds are fine.
+The one exception is :mod:`src.difficulty`, which reads layer times as whole-note
+fractions in order to convert its window to seconds: to measure difficulty (or
+run :mod:`src.sheet_reducer`) on PIG layers, pass ``bpm=240``, at which a whole
+note lasts one second, so the seconds are read as they are.  That is how the
+difficulty ceilings in :mod:`src.sheet_reducer` were measured.
 """
 
 import os

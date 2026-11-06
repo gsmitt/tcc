@@ -1,10 +1,11 @@
 """Assign every note to a hand (staff) via a register split-point.
 
-The previous version assigned whole *voices* (from :mod:`src.voice_separator`)
-to a hand by their mean pitch.  That granularity produced two artefacts on
-polyphonic textures: a re-struck low pedal tone scattered across voices would
+An earlier version partitioned the notes into monophonic voices and assigned each
+whole voice to a hand by its mean pitch.  That granularity produced two artefacts
+on polyphonic textures: a re-struck low pedal tone scattered across voices would
 drag a high-mean voice's outliers into the treble staff, and a chord whose notes
-landed in voices assigned to different hands was split across staves.
+landed in voices assigned to different hands was split across staves.  The voice
+partition was dropped from the pipeline along with it.
 
 This version decides the staff of each *note* directly, per onset, with a moving
 pitch boundary ``b`` (the "split point"): notes below ``b`` go to the left hand,
@@ -39,32 +40,23 @@ Sources this is adapted from (verify exact pages before citing in the thesis):
     Sciences 517 (2020);
   * the keys-per-hand / stretch limits follow Parncutt, Sloboda, Clarke,
     Raekallio & Desain, "An Ergonomic Model of Keyboard Fingering for Melodic
-    Fragments", Music Perception 14(4) (1997);
+    Fragments", Music Perception 14(4) (1997), Table 1, p. 346 (the *span*
+    limits only -- the per-interval move costs are Hart, Bosch & Tsai 2000,
+    see :mod:`src.costs`);
   * deciding the split by pitch distance is in the spirit of the contig-
     connection cost of Chew & Wu, "Separating Voices in Polyphonic Music: A
     Contig Mapping Approach", CMMR (2004).
 
-A "note record" is the tuple produced by :mod:`src.voice_separator`:
-    (start_time, midi_pitch, end_time, layer_idx, note_idx_in_layer)
-Only ``midi_pitch`` and the ``(layer_idx, note_idx_in_layer)`` key are used; the
-voices merely carry the notes (grouping by ``layer_idx`` recovers the original
-onsets), so the quality of the voice separation no longer affects the staves.
+Assigners read the layer sequence of :mod:`src.midi_reader` directly.
 """
 
 FEAS_PENALTY = 1000.0   # soft "infeasible": exceeds keys-per-hand or stretch
 
 
-def _onsets_from_voices(voices):
-    """Recover per-onset note lists from the flat voice note-records.
-
-    Returns ``[(layer_idx, [(pitch, note_idx), ...]), ...]`` sorted by onset,
-    each note list sorted by pitch.
-    """
-    by_layer = {}
-    for voice in voices:
-        for (_start, pitch, _end, layer_idx, note_idx) in voice:
-            by_layer.setdefault(layer_idx, []).append((pitch, note_idx))
-    return [(layer_idx, sorted(by_layer[layer_idx])) for layer_idx in sorted(by_layer)]
+def _onsets_from_layers(layers):
+    """Return ``[(layer_idx, [(pitch, note_idx), ...]), ...]``, each list pitch-sorted."""
+    return [(li, sorted((p, ni) for ni, (p, _e) in enumerate(layer["notes"])))
+            for li, layer in enumerate(layers) if layer["notes"]]
 
 
 def _emission(pitches, b, max_notes, max_span, cohesion_penalty):
@@ -87,7 +79,7 @@ def _emission(pitches, b, max_notes, max_span, cohesion_penalty):
     return cost
 
 
-def assign_voices_to_hands(voices,
+def assign_layers_to_hands(layers,
                            max_notes_per_hand=5,
                            max_span_semitones=14,
                            smooth_weight=0.6,
@@ -95,10 +87,10 @@ def assign_voices_to_hands(voices,
                            seed_boundary=60.0):
     """Return a dict ``(layer_idx, note_idx_in_layer) -> "L" | "R"``.
 
-    Every note carried by ``voices`` is labelled by the split-point DP described
+    Every note of ``layers`` is labelled by the split-point DP described
     in the module docstring.
     """
-    onsets = _onsets_from_voices(voices)
+    onsets = _onsets_from_layers(layers)
     if not onsets:
         return {}
 

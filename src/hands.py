@@ -40,8 +40,10 @@ class Hand:
 
 
 DEFAULT_HANDS = [
-    Hand("L", "L", register=53.0),   # F3, conventional bass-staff centre
-    Hand("R", "R", register=67.0),   # G4, conventional treble-staff centre
+    Hand("L", "L", register=53.0),   # F3, the line the bass (F) clef marks
+    Hand("R", "R", register=67.0),   # G4, the line the treble (G) clef marks
+    # (staff *centres* are D3 / B4; F3 and G4 are 7 semitones either side of
+    #  middle C, so the seed boundary between them is C4 = 60)
 ]
 
 

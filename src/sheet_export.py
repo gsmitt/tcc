@@ -14,7 +14,7 @@ Known limitations (sufficient for the Moonlight excerpt this targets):
 - One LilyPond voice per hand (chord-per-onset). True within-hand polyphony --
   a note held while another moves in the *same* hand at a later onset -- is
   approximated (clamped to the next onset), not split into \\voiceOne/\\voiceTwo.
-  Future work could use the per-voice output of :mod:`src.voice_separator`.
+  Future work could recover voices for this purpose.
 - Tuplets are detected per beat with equal subdivisions (triplets, sextuplets,
   ...). Tuplets spanning multiple beats or nested/mixed tuplets are out of scope.
 - Time signature defaults to 4/4 (parameter). Reading it from the MIDI meta is

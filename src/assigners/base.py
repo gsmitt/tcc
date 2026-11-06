@@ -23,10 +23,8 @@ contribution.  Registering all three behind :func:`src.assigners.get_assigner`
 mirrors the solver registry in :mod:`src.solvers` and makes the coupling depth an
 ablation axis (compare staff splits, fingering cost and runtime by name).
 
-A "note record" is the tuple produced by :mod:`src.voice_separator`:
-    (start_time, midi_pitch, end_time, layer_idx, note_idx_in_layer)
-The voices carry release (``end``) times, so the onset structure -- including the
-release time each solver needs -- is fully recoverable from ``voices`` alone.
+Assigners read the layer sequence produced by :mod:`src.midi_reader` directly:
+``[{"time": onset, "notes": [(pitch, end), ...]}, ...]``.
 """
 
 from abc import ABC, abstractmethod
@@ -35,15 +33,15 @@ from src.hands import DEFAULT_HANDS, validate
 
 
 class HandAssigner(ABC):
-    """Assign every note carried by ``voices`` to a hand.
+    """Assign every note of ``layers`` to a hand.
 
-    Subclasses read :attr:`voices` and :attr:`hands` and implement :meth:`assign`.
+    Subclasses read :attr:`layers` and :attr:`hands` and implement :meth:`assign`.
     ``hands`` is an ordered list of :class:`src.hands.Hand`, sorted low -> high by
     register.
     """
 
-    def __init__(self, voices, hands=DEFAULT_HANDS):
-        self.voices = voices
+    def __init__(self, layers, hands=DEFAULT_HANDS):
+        self.layers = layers
         self.hands = validate(hands)
 
     @abstractmethod
@@ -52,23 +50,14 @@ class HandAssigner(ABC):
         ...
 
 
-def onsets_with_release(voices):
-    """Recover per-onset note lists from the flat voice note-records.
+def onsets_with_release(layers):
+    """Per-onset note lists: ``[(layer_idx, onset, [(pitch, end, note_idx), ...]), ...]``.
 
-    Returns ``[(layer_idx, start_time, [(pitch, end, note_idx), ...]), ...]``
-    sorted by onset, each note list sorted by pitch.  This is the
-    release-carrying analogue of :func:`src.hand_assigner._onsets_from_voices`:
-    the joint assigners need the ``end`` time to feed
+    Each note list is sorted by pitch.  The joint assigners need ``end`` to feed
     :func:`src.costs.chord_complexity` and the solver-style held-finger state, and
-    ``start_time`` to know when a finger has come free -- both of which the
-    split-point assigner discards.  All notes of one layer share its onset start,
-    so it is recorded once per layer.
+    the onset to know when a finger has come free; the split-point assigner
+    discards both.
     """
-    by_layer = {}
-    start_of = {}
-    for voice in voices:
-        for (start, pitch, end, layer_idx, note_idx) in voice:
-            by_layer.setdefault(layer_idx, []).append((pitch, end, note_idx))
-            start_of[layer_idx] = start
-    return [(layer_idx, start_of[layer_idx], sorted(by_layer[layer_idx]))
-            for layer_idx in sorted(by_layer)]
+    return [(li, layer["time"],
+             sorted((p, e, ni) for ni, (p, e) in enumerate(layer["notes"])))
+            for li, layer in enumerate(layers) if layer["notes"]]

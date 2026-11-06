@@ -17,7 +17,9 @@ emission ignores cross-onset finger held-state (that is :mod:`joint_full`).  Thi
 keeps the DP as light as the proxy version, so it is safe inside the reducer loop.
 
 Cost model and the boundary-DP structure are unchanged from their sources
-(Parncutt et al. 1997 for the ergonomic cost; the single-boundary hand split is
+(Hart, Bosch & Tsai 2000 for the per-interval move costs and Parncutt et al.
+1997 for the simultaneous span limits -- see :mod:`src.costs`; the
+single-boundary hand split is
 the simplified analogue of the HMM hand separation of Nakamura, Saito & Yoshii,
 Information Sciences 517, 2020).  Driving the boundary by the realised fingering
 cost is this work's contribution.
@@ -51,10 +53,10 @@ def _hand_cost(notes, side, fingers):
 class JointLocalAssigner(HandAssigner):
     """Two-hand baseline (proxy for the coupled :class:`JointFullAssigner`)."""
 
-    def __init__(self, voices, hands=DEFAULT_HANDS,
+    def __init__(self, layers, hands=DEFAULT_HANDS,
                  smooth_weight=0.6,
                  seed_boundary=None):
-        super().__init__(voices, hands)
+        super().__init__(layers, hands)
         if len(self.hands) != 2:
             raise ValueError("joint-local is a two-hand baseline; use joint-full "
                              "for more than two hands")
@@ -64,7 +66,7 @@ class JointLocalAssigner(HandAssigner):
                               else (self.hands[0].register + self.hands[1].register) / 2.0)
 
     def assign(self) -> dict:
-        onsets = onsets_with_release(self.voices)
+        onsets = onsets_with_release(self.layers)
         if not onsets:
             return {}
 

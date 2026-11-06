@@ -12,6 +12,7 @@ from ..costs import (
     MAX_MOVE_COST_HARD,
     chord_complexity,
     fingering_transition_cost,
+    held_reach_cost,
 )
 from ..hand import HandState
 from .base import FingeringSolver, SolverResult
@@ -39,9 +40,14 @@ class GraphSolver(FingeringSolver):
         chord = self.layers[idx]
         time = chord["time"]
         available_fingers = [x for x in self.fingers if hand_state.is_available(x, time)]
+        still_held = [(st["note"], f) for f, st in hand_state.fingers.items()
+                      if st["release_time"] > time]
 
         for fingers in self._possible_fingerings(len(chord["notes"]), available_fingers):
             chord_cost = chord_complexity(chord["notes"], fingers, self.hand)
+            reach, released = held_reach_cost(still_held, chord["notes"], fingers,
+                                              self.hand)
+            chord_cost += reach
             if prev_notes is None:
                 move_cost = 0
             else:
@@ -60,6 +66,8 @@ class GraphSolver(FingeringSolver):
             new_hand_state = hand_state.copy()
             for f in range(len(fingers)):
                 new_hand_state.assign(fingers[f], chord["notes"][f][0], chord["notes"][f][1])
+            for f in released:          # a note let go early frees its finger
+                new_hand_state.release(f)
             self._dfs(idx + 1, chord["notes"], fingers, new_cost, path, new_hand_state)
             path.pop()
 

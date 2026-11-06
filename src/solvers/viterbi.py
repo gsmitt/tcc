@@ -8,10 +8,11 @@ the DFS solvers suffer from on large inputs (500+ layers).
 
 A DP state at a layer is `(fingers, held)`:
   - `fingers`  - the fingering tuple assigned to this layer's notes.
-  - `held`     - a 5-tuple of release times (finger 1..5), i.e. a hashable
-                 snapshot of `HandState`. This carries sustained-note
+  - `held`     - a 5-tuple of `(release_time, pitch)` per finger 1..5, i.e. a
+                 hashable snapshot of `HandState`. This carries sustained-note
                  availability exactly, so the result matches the brute-force
-                 optimum.
+                 optimum; the pitch lets `held_reach_cost` check that a note
+                 still held is within reach of the notes the hand starts.
 
 `held` is canonicalized against the time at which it will next be queried (the
 next layer's onset): any finger already released by then is free for every later
@@ -27,11 +28,12 @@ from ..costs import (
     MAX_MOVE_COST_HARD,
     chord_complexity,
     fingering_transition_cost,
+    held_reach_cost,
 )
 from .base import FingeringSolver, SolverResult
 
 
-FREE = (0, 0, 0, 0, 0)  # release time per finger when the hand starts empty
+FREE = ((0, 0),) * 5  # (release time, pitch) per finger when the hand starts empty
 
 
 class ViterbiSolver(FingeringSolver):
@@ -44,7 +46,7 @@ class ViterbiSolver(FingeringSolver):
         # mirrors HandState.is_available: finger free once its note is released.
         # Only this hand's available fingers are candidates (missing fingers are
         # never offered); the held tuple stays width-5, unused slots stay 0.
-        return [f for f in self.fingers if held[f - 1] <= time]
+        return [f for f in self.fingers if held[f - 1][0] <= time]
 
     def _assign(self, held, fingers, notes, query_time):
         # mirrors HandState.copy() + assign: untouched fingers keep their hold.
@@ -52,8 +54,13 @@ class ViterbiSolver(FingeringSolver):
         # on, so clamp it to 0 to keep functionally-identical states merged.
         new_held = list(held)
         for f, note in zip(fingers, notes):
-            new_held[f - 1] = note[1]  # note = (pitch, release_time)
-        return tuple(r if r > query_time else 0 for r in new_held)
+            new_held[f - 1] = (note[1], note[0])  # note = (pitch, release_time)
+        return tuple(h if h[0] > query_time else (0, 0) for h in new_held)
+
+    @staticmethod
+    def _held_notes(held, time):
+        # (pitch, finger) for every finger still pressing a key at `time`
+        return [(p, f) for f, (r, p) in enumerate(held, start=1) if r > time]
 
     def solve(self) -> SolverResult:
         if not self.layers:
@@ -74,6 +81,12 @@ class ViterbiSolver(FingeringSolver):
                 dp[state] = cost
                 parent[(0, state)] = None
         self.peak_states = max(self.peak_states, len(dp))
+        if not dp:
+            # the first layer alone needs more fingers than the hand has
+            return SolverResult(
+                cost=math.inf, path=[], node_visits=self.node_visits,
+                extras={"peak_states": self.peak_states, "failed_at": 0},
+            )
 
         for idx in range(1, len(self.layers)):
             prev_notes = self.layers[idx - 1]["notes"]
@@ -87,6 +100,7 @@ class ViterbiSolver(FingeringSolver):
             next_dp = {}
             for (prev_fingers, held), prev_cost in dp.items():
                 available = self._available(held, time)
+                still_held = self._held_notes(held, time)
                 for fingers in combinations(available, n):
                     self.node_visits += 1
                     move_cost = fingering_transition_cost(
@@ -95,10 +109,15 @@ class ViterbiSolver(FingeringSolver):
                     if move_cost > MAX_MOVE_COST_HARD:
                         continue
 
-                    new_cost = prev_cost + move_cost + chord_complexity(
-                        notes, fingers, self.hand
-                    )
-                    state = (fingers, self._assign(held, fingers, notes, next_time))
+                    reach, released = held_reach_cost(still_held, notes, fingers,
+                                                      self.hand)
+                    new_cost = (prev_cost + move_cost + reach
+                                + chord_complexity(notes, fingers, self.hand))
+                    new_held = self._assign(held, fingers, notes, next_time)
+                    if released:   # a note let go early frees its finger
+                        new_held = tuple((0, 0) if f in released else h
+                                         for f, h in enumerate(new_held, start=1))
+                    state = (fingers, new_held)
                     if new_cost < next_dp.get(state, math.inf):
                         next_dp[state] = new_cost
                         parent[(idx, state)] = (prev_fingers, held)
