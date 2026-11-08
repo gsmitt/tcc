@@ -18,6 +18,7 @@ mãos.
 - [Dedilhar uma peça](#dedilhar-uma-peça-mainpy)
 - [Medir a dificuldade](#medir-a-dificuldade-difficulty_profilepy)
 - [Avaliação e testes](#avaliação-e-testes-evaluatepy)
+- [Otimização dos parâmetros](#otimização-dos-parâmetros-otimizarpy)
 - [Organização do código](#organização-do-código)
 - [Referências](#referências)
 
@@ -202,17 +203,59 @@ as primeiras `--slice` camadas e pula essas buscas quando a parte de uma mão pa
 `--max-dfs` camadas. O `beamgap` compara o `joint-full` com e sem o feixe em trechos curtos
 (`--length` instantes, um a cada `--stride`), porque a busca sem feixe também é exponencial.
 
+## Otimização dos parâmetros: `otimizar.py`
+
+Alguns números do modelo não vêm de nenhuma fonte e foram escolhidos neste trabalho. O
+`otimizar.py` ajusta os que mudam o dedilhado ou a divisão entre as mãos, usando só as 120
+peças do PIG que ficam fora do conjunto de teste (031 a 150). As peças 001 a 030, o conjunto
+de teste de Nakamura, Saito e Yoshii (2020), nunca entram no ajuste.
+
+```bash
+python otimizar.py all                                 # as três etapas, na ordem da tabela
+python otimizar.py cost                                # só os pesos do custo (e o teto)
+python otimizar.py stability --variant joint-full      # só a estabilidade de uma variante (e o teto)
+python otimizar.py ceiling                             # só a nova medição do teto
+```
+
+| Etapa | O que ajusta | Como |
+|---|---|---|
+| `cost` | pesos do custo ergonômico: cruzamento, abertura total do acorde, esticar além do confortável, soltar uma nota presa, movimentos fora das tabelas, uníssono e limite do par 1-5 | com as mãos anotadas no PIG, para não favorecer nenhuma variante, maximizando $M_{gen}$ |
+| `stability` | o peso de estabilidade da fronteira de cada variante (e a penalidade de acorde separado do `split`) | com cada variante, maximizando $S_{gen}$, em que mão e dedo precisam coincidir |
+| `ceiling` | o teto de dificuldade | não é ajuste: mede de novo o percentil 90 da dificuldade com os pesos novos e o `joint-local`; toda execução termina com essa medição |
+
+A busca é por coordenadas: a partir dos valores escolhidos à mão, cada rodada testa todos os
+valores da grade de um parâmetro, com os outros fixos, e fica com o melhor; para quando uma
+rodada inteira não muda nada. As peças são avaliadas em paralelo (`--processes`), e cada
+combinação é avaliada uma vez só. Quando o melhor valor de um parâmetro é o maior da grade,
+o programa avisa e registra isso no `parametros.json`, porque o melhor valor pode estar além
+dela.
+
+O resultado vai para `parametros.json`, na raiz do repositório, com os valores, o teto e
+como foram obtidos. O `main.py` e o `evaluate.py` passam a usar esse arquivo quando ele
+existe. Para avaliar com os valores escolhidos à mão:
+
+```bash
+python evaluate.py --params hand-picked pig --assigner joint-full
+```
+
+Os valores de partida, as grades e os motivos para não ajustar os demais números (feixe,
+janela, parâmetros da redução e da gravação, e os valores que representam "impossível")
+estão em `src/params.py`. Cada tentativa fica registrada em `output/otimizacao/`.
+
 ## Organização do código
 
 ```
 main.py                   dedilha uma peça e grava a partitura
 difficulty_profile.py     mostra a dificuldade de uma peça
 evaluate.py               avaliação, experimentos e testes
+otimizar.py               ajuste dos parâmetros nas peças de treino do PIG
+parametros.json           valores ajustados em uso (gerado pelo otimizar.py)
 data/mond_1.mid           peça de exemplo
 src/
   midi_reader.py          leitura do MIDI: camadas e andamento
   pig_loader.py           leitura do conjunto de dedilhados PIG (Nakamura, Saito e Yoshii, 2020)
   hands.py                descrição das mãos (lado, dedos, registro, executante)
+  params.py               parâmetros sem fonte: valores, grades e os que não se ajustam
   costs.py                modelo de custo ergonômico (tabelas e limites de abertura)
   hand.py                 estado dos dedos durante a busca
   assigners/              atribuição de mãos: split, joint-local, joint-full e fixed

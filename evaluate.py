@@ -95,10 +95,11 @@ from src.assigners import joint_full
 from src.solvers import get_solver
 from src.solvers.base import SolverResult
 from src.sheet_export import render_fingering_pdf
-from src.sheet_reducer import DEFAULT_TARGET, reduce_score
+from src.sheet_reducer import default_target, reduce_score
 from src.difficulty import DEFAULT_DELTA_T, note_difficulties
 from src.hands import DEFAULT_HANDS, Hand
 from src import costs
+from src import params
 from src import metrics
 from src import pig_loader
 from src.costs import set_span_limits
@@ -154,7 +155,7 @@ def _flatten_difficulty(diff_stats, row):
 
 
 def run_ablation(midi_path, slice_n, max_dfs, delta_t=DEFAULT_DELTA_T,
-                 target=DEFAULT_TARGET):
+                 target=None):
     """Ablate over (reduce x assigner x solver) on one MIDI file.
 
     Difficulty is a cost per second (:mod:`src.difficulty`), so every row records
@@ -164,6 +165,8 @@ def run_ablation(midi_path, slice_n, max_dfs, delta_t=DEFAULT_DELTA_T,
     three settings rather than two, so the tempo operation can be isolated from
     the paper's note edits.
     """
+    if target is None:
+        target = default_target()
     hands = DEFAULT_HANDS
     all_layers, tempo = read_midi(midi_path)
     original = all_layers[:slice_n]
@@ -508,6 +511,7 @@ def run_selftest():
     check_unfingerable_first_layer()
     check_duet_end_to_end()
     check_reduce_missing_finger()
+    check_params_and_split()
     check_pig_identity()
 
 
@@ -599,7 +603,8 @@ def check_held_reach():
     finger that let go is free for the next onset, so a five-note chord that
     follows is still fingerable.
     """
-    from src.costs import HELD_RELEASE_COST
+    from src import params
+    release = params.get("release")
     def run(layers, name):
         return get_solver(name)(layers, hand="R").solve().cost
     held = [{"time": 0.0, "notes": [(48, 2.0)]}, {"time": 1.0, "notes": [(84, 2.0)]}]
@@ -608,7 +613,7 @@ def check_held_reach():
     near_freed = [{"time": 0.0, "notes": [(60, 1.0)]}, {"time": 1.0, "notes": [(64, 2.0)]}]
     chord = {"time": 1.5, "notes": [(72, 3.0), (74, 3.0), (76, 3.0), (77, 3.0), (79, 3.0)]}
     for name in ("viterbi", "graph"):
-        assert abs(run(held, name) - run(freed, name) - HELD_RELEASE_COST) < 1e-9, name
+        assert abs(run(held, name) - run(freed, name) - release) < 1e-9, name
         assert abs(run(near, name) - run(near_freed, name)) < 1e-9, name
         tail = [{"time": 0.0, "notes": [(48, 3.0)]},
                 {"time": 1.0, "notes": [(84, 1.2)]}, chord]
@@ -694,6 +699,31 @@ def check_duet_end_to_end(midi_path="data/mond_1.mid", n_layers=60):
     print("OK: four-hand duet (one three-finger hand) runs end to end")
 
 
+def check_params_and_split(root=DEFAULT_PIG_ROOT):
+    """The fitted weights reach the cost, and the fit never sees a test piece.
+
+    Raising the crossing weight by 5 must raise the cost of a chord with two
+    inverted pairs by exactly 10, and restoring the values must restore it.  The
+    optimiser's training set must be the 120 PIG pieces outside 001-030.
+    """
+    saved = params.current()
+    chord = [(60, 1.0), (64, 1.0), (67, 1.0)]
+    base = costs.chord_complexity(chord, (3, 2, 1), "R")
+    params.set(crossing=saved["values"]["crossing"] + 5)
+    try:
+        assert abs(costs.chord_complexity(chord, (3, 2, 1), "R") - base - 10) < 1e-9
+    finally:
+        params.set(ceiling=saved["ceiling"], **saved["values"])
+    assert costs.chord_complexity(chord, (3, 2, 1), "R") == base
+    if os.path.isdir(root):
+        import otimizar
+        ids = [p for p, _ in otimizar.training_pieces(root)]
+        assert len(ids) == 120 and not set(ids) & pig_loader.TEST_PIECES, ids[:3]
+        print("OK: fitted weights reach the cost; the fit uses pieces 031-150 only")
+    else:
+        print("OK: fitted weights reach the cost (split check skipped: no PIG)")
+
+
 def check_reduce_missing_finger(midi_path="data/mond_1.mid", n_layers=60):
     """The reducer measures the hands it is given, fingers missing or not.
 
@@ -715,7 +745,7 @@ def check_reduce_missing_finger(midi_path="data/mond_1.mid", n_layers=60):
         red.layers, DEFAULT_DELTA_T, "joint-local", tempo.bpm * red.tempo_factor, hands)
     used = {f for _notes, fs in rh.path for f in fs}
     assert used <= {1, 2, 3}, f"three-finger hand used fingers {used}"
-    tl, tr, tb = DEFAULT_TARGET
+    tl, tr, tb = default_target()
     assert all(dl <= tl and dr <= tr and db <= tb for dl, dr, db in diffs), \
         "reduced score left above the ceiling for the three-finger hand"
     duet = [Hand("S-L", "L", register=41.0), Hand("S-R", "R", register=53.0),
@@ -924,11 +954,11 @@ def provenance(args, hands=DEFAULT_HANDS):
         "hands": [dataclasses.asdict(h) for h in hands],
         "max_comfort": pairs(costs.MAX_COMFORT),
         "max_abs": pairs(costs.MAX_ABS),
-        "held_release_cost": costs.HELD_RELEASE_COST,
+        "model_params": params.current(),
         "max_move_cost_hard": costs.MAX_MOVE_COST_HARD,
         "group_eps": pig_loader.GROUP_EPS,
         "joint_full_defaults": jf_defaults,
-        "default_target": list(DEFAULT_TARGET),
+        "default_target": list(default_target()),
         "default_delta_t": DEFAULT_DELTA_T,
     })
     status = _git("status", "--porcelain", "--", "evaluate.py", "src")
@@ -979,6 +1009,10 @@ def write_table(rows, out_stem, meta=None):
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--params", default="optimized",
+                    help='model parameters: "optimized" (parametros.json, the '
+                         'default when it exists), "hand-picked", or a file '
+                         'written by otimizar.py')
     sub = ap.add_subparsers(dest="mode", required=True)
 
     a = sub.add_parser("ablation")
@@ -1023,6 +1057,7 @@ def main():
     sub.add_parser("selftest")
 
     args = ap.parse_args()
+    params.use(args.params)
 
     if args.mode == "selftest":
         run_selftest()

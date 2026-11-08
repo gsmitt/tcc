@@ -1,0 +1,83 @@
+{
+  "values": {
+    "crossing": 10.0,
+    "chord_span_threshold": 7.0,
+    "chord_span_weight": 2.0,
+    "stretch_base": 0.0,
+    "stretch_weight": 2.0,
+    "release": 50.0,
+    "untabulated_offset": 2.0,
+    "unison": 2.0,
+    "comfort_1_5": 13.0,
+    "smooth_split": 0.2,
+    "smooth_local": 16.0,
+    "smooth_full": 0.6,
+    "cohesion_split": 0.0
+  },
+  "ceiling": [
+    44.0,
+    57.0,
+    89.0
+  ],
+  "meta": {
+    "updated": "2026-11-08T12:03:04",
+    "git_commit": "d6131b9fa8c1c338f99c1cbbfaf26771a888302b",
+    "code_fingerprint": "2cad34d715f4b2585ee0fee7b6e497bfb162157aaf19831999f159326783bb93",
+    "training_pieces": "PIG 031-150 (120 pieces)",
+    "excluded_pieces": "PIG 001-030, the test set of Nakamura, Saito & Yoshii (2020)",
+    "stages": {
+      "cost": {
+        "metric": "M_gen",
+        "assigner": "oracle",
+        "search": "coordinate descent",
+        "rounds": 3,
+        "trials": 160,
+        "start": {
+          "crossing": 10.0,
+          "chord_span_threshold": 7.0,
+          "chord_span_weight": 2.0,
+          "stretch_base": 3.0,
+          "stretch_weight": 3.0,
+          "release": 10.0,
+          "untabulated_offset": 2.0,
+          "unison": 1.0,
+          "comfort_1_5": 12.0
+        },
+        "score_start": 0.623196,
+        "score_best": 0.631103,
+        "at_upper_edge": [
+          "comfort_1_5"
+        ]
+      },
+      "stability/split": {
+        "metric": "S_gen",
+        "assigner": "split",
+        "search": "coordinate descent",
+        "rounds": 3,
+        "trials": 40,
+        "start": {
+          "smooth_split": 0.6,
+          "cohesion_split": 8.0
+        },
+        "score_start": 0.362672,
+        "score_best": 0.449952,
+        "at_upper_edge": []
+      },
+      "stability/joint-local": {
+        "metric": "S_gen",
+        "assigner": "joint-local",
+        "search": "coordinate descent",
+        "rounds": 1,
+        "trials": 15,
+        "start": {
+          "smooth_local": 0.6
+        },
+        "score_start": 0.433881,
+        "score_best": 0.470253,
+        "at_upper_edge": [
+          "smooth_local"
+        ]
+      }
+    }
+  }
+}

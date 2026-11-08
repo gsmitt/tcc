@@ -61,6 +61,7 @@ from src.costs import (
     held_reach_cost,
 )
 from src.hands import DEFAULT_HANDS
+from src import params
 from .base import HandAssigner, onsets_with_release
 
 FREE = ((0, 0),) * 5     # (release time, pitch) per finger when a hand starts empty
@@ -92,11 +93,13 @@ def _assign(held, fingers, notes, query_time):
 
 class JointFullAssigner(HandAssigner):
     def __init__(self, layers, hands=DEFAULT_HANDS,
-                 smooth_weight=0.6,
+                 smooth_weight=None,
                  beam=32,
                  boundary_window=6):
         super().__init__(layers, hands)
-        self.smooth_weight = smooth_weight
+        # None: the weight in force (src.params, ``smooth_full``)
+        self.smooth_weight = (smooth_weight if smooth_weight is not None
+                              else params.get("smooth_full"))
         self.beam = beam
         self.boundary_window = boundary_window
         self.total_cost = 0.0            # set by assign(); 0 for trivial inputs

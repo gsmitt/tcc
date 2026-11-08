@@ -28,6 +28,7 @@ cost is this work's contribution.
 from itertools import combinations
 
 from src.costs import chord_complexity
+from src import params
 from src.hands import DEFAULT_HANDS
 from .base import HandAssigner, onsets_with_release
 
@@ -54,13 +55,15 @@ class JointLocalAssigner(HandAssigner):
     """Two-hand baseline (proxy for the coupled :class:`JointFullAssigner`)."""
 
     def __init__(self, layers, hands=DEFAULT_HANDS,
-                 smooth_weight=0.6,
+                 smooth_weight=None,
                  seed_boundary=None):
         super().__init__(layers, hands)
         if len(self.hands) != 2:
             raise ValueError("joint-local is a two-hand baseline; use joint-full "
                              "for more than two hands")
-        self.smooth_weight = smooth_weight
+        # None: the weight in force (src.params, ``smooth_local``)
+        self.smooth_weight = (smooth_weight if smooth_weight is not None
+                              else params.get("smooth_local"))
         # seed the boundary at the midpoint of the two hands' registers
         self.seed_boundary = (seed_boundary if seed_boundary is not None
                               else (self.hands[0].register + self.hands[1].register) / 2.0)

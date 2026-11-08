@@ -66,7 +66,7 @@ cost, whichever is cheaper; holding C3 with the thumb while the index plays C6 i
 no longer free, the C3 is let go.
 
 **Chord width.** The hard limit on a chord's total span is the absolute limit of
-the widest pair, `MAX_ABS[(1, 5)]` (14 semitones), so it agrees with the pair
+the widest pair, `MAX_ABS[(1, 5)]` (``comfort_1_5`` + 2 semitones), so it agrees with the pair
 limits instead of cutting at the octave.
 
 The 100 sentinel in the tables marks moves the source marks as non-existent. It
@@ -75,6 +75,11 @@ threshold.
 """
 
 MAX_MOVE_COST_HARD = 100
+
+# Weights chosen by this project, not by a source (crossing, chord span, stretch,
+# release, untabulated moves, unison, the 1-5 comfortable span) live in
+# :mod:`src.params`, where ``otimizar.py`` fits them; ``P`` is the live dict.
+from src.params import VALUES as P
 
 DISTANCE_COSTS = {
     "w-w": {
@@ -162,9 +167,11 @@ def key_color(midi_note: int) -> str:
 #   * pairs 1-2, 1-3, 1-4: MAX_COMFORT is their *MaxRel* (one level below
 #     MaxComf), a deliberately conservative reading of the thumb's reach, with
 #     MAX_ABS = MAX_COMFORT + 2, the relation the paper itself defines;
-#   * pair 1-5: 12/14 correspond to no column of the paper -- they are the
-#     octave and the major ninth, chosen by pianistic convention. Both sit below
-#     the paper's MaxPrac of 15 for this pair.
+#   * pair 1-5: its comfortable span is a parameter (``comfort_1_5`` in
+#     src.params, searched from 10 to the paper's MaxComf of 13) and its
+#     absolute span is two semitones above.  The 12/14 below are the
+#     hand-picked start, the octave and the major ninth; ``set_span_limits``
+#     puts the value in force in their place when the module loads.
 MAX_COMFORT = {(1, 2): 5, (1, 3): 7, (1, 4): 9, (1, 5): 12, (2, 3): 3,
                (2, 4): 5, (2, 5): 8, (3, 4): 2, (3, 5): 5, (4, 5): 3}
 MAX_ABS = {(1, 2): 7, (1, 3): 9, (1, 4): 11, (1, 5): 14, (2, 3): 5,
@@ -180,11 +187,32 @@ SPAN_LIMITS = {
 }
 
 
+_SPAN_LIMITS_NAME = "tcc"
+
+
 def set_span_limits(name):
-    """Switch the pair limits in place (``"tcc"`` default, ``"parncutt"``)."""
-    comfort, absol = SPAN_LIMITS[name]
+    """Switch the pair limits in place (``"tcc"`` default, ``"parncutt"``).
+
+    Under ``"tcc"`` the 1-5 pair takes its comfortable span from
+    :mod:`src.params` (``comfort_1_5``) and its absolute span two semitones
+    above, the relation the paper fixes between its comfortable and practical
+    levels; ``"parncutt"`` keeps the paper's own 13/15.
+    """
+    global _SPAN_LIMITS_NAME
+    comfort, absol = (dict(d) for d in SPAN_LIMITS[name])
+    if name == "tcc":
+        comfort[(1, 5)] = P["comfort_1_5"]
+        absol[(1, 5)] = P["comfort_1_5"] + 2
     MAX_COMFORT.clear(); MAX_COMFORT.update(comfort)
     MAX_ABS.clear(); MAX_ABS.update(absol)
+    _SPAN_LIMITS_NAME = name
+
+
+def current_span_limits():
+    return _SPAN_LIMITS_NAME
+
+
+set_span_limits("tcc")     # apply the 1-5 span in force (src.params)
 
 
 def _stretch_cost(finger_a, finger_b, span):
@@ -199,7 +227,7 @@ def _stretch_cost(finger_a, finger_b, span):
     if span > absol:
         return MAX_MOVE_COST_HARD
     if span > comfort:
-        return 3 + (span - comfort) * 3
+        return P["stretch_base"] + (span - comfort) * P["stretch_weight"]
     return None
 
 
@@ -222,11 +250,11 @@ def finger_move_cost(note_prev, note_curr, finger_prev, finger_curr, hand="R"):
     finger_combo = DISTANCE_COSTS[transition].get(key, None)
 
     if finger_combo is None:
-        return note_span + 2
+        return note_span + P["untabulated_offset"]
     if note_span == 0:
-        return 1                       # repeated note; not tabulated by Hart et al.
+        return P["unison"]             # repeated note; not tabulated by Hart et al.
     if note_span > len(finger_combo):  # wider than the table's 12 semitones
-        return note_span + 2
+        return note_span + P["untabulated_offset"]
     return finger_combo[note_span - 1]     # column `note_span` of the source table
 
 
@@ -263,14 +291,14 @@ def chord_complexity(notes, fingers, hand="R"):
         _, f_a = combined[i]
         _, f_b = combined[i + 1]
         if f_a > f_b:
-            total_cost += 10
+            total_cost += P["crossing"]
 
     # 2. Penalize wide spans (thumb–pinky distance); beyond the widest pair's
     #    absolute limit no fingering reaches the chord.
     if max_span > MAX_ABS[(1, 5)]:
         total_cost += MAX_MOVE_COST_HARD
     else:
-        total_cost += max(0, (max_span - 7)) * 2
+        total_cost += max(0, max_span - P["chord_span_threshold"]) * P["chord_span_weight"]
 
     # 3. Base ergonomic cost: stretch model first (handles octaves+ and rejects
     #    pairs that physically cannot span the interval), then the distance table.
@@ -291,11 +319,11 @@ def chord_complexity(notes, fingers, hand="R"):
             # within comfortable reach: use the table (columns are interval
             # sizes 1..12), clamped to its widest tabulated value.
             if note_span == 0:
-                total_cost += 1        # unison; not tabulated by Hart et al.
+                total_cost += P["unison"]   # unison; not tabulated by Hart et al.
             else:
                 total_cost += finger_combo[min(note_span, len(finger_combo)) - 1]
         else:
-            total_cost += note_span + 2
+            total_cost += note_span + P["untabulated_offset"]
 
     return total_cost
 
@@ -304,8 +332,7 @@ def chord_complexity(notes, fingers, hand="R"):
 # Cost of letting go of a held note before its written end because the hand
 # cannot (or should not) keep it while it plays the new notes: the legato or the
 # held sound the score asks for is lost, though the pedal often keeps the sound.
-# Same weight as an inversion: above every tabulated move (thesis §4.3.1).
-HELD_RELEASE_COST = 10
+# Its weight is ``P["release"]`` (src.params).
 
 
 def held_reach_cost(held, notes, fingers, hand="R"):
@@ -316,7 +343,7 @@ def held_reach_cost(held, notes, fingers, hand="R"):
     notes and the fingers chosen for them.  For each held note the hand takes the
     cheaper of two options: keep it, paying the stretch between it and every new
     note under the chord pair limits (`_stretch_cost`), or release it early,
-    paying `HELD_RELEASE_COST`.  A held note beyond the absolute limit of a pair
+    paying ``P["release"]``.  A held note beyond the absolute limit of a pair
     is therefore always released, never treated as impossible: in a score a long
     bass note under a moving hand is normal, and the pianist lets go of the key.
 
@@ -332,8 +359,8 @@ def held_reach_cost(held, notes, fingers, hand="R"):
             stretch = _stretch_cost(held_finger, finger, abs(pitch - held_pitch))
             if stretch is not None:
                 keep += stretch
-        if keep > HELD_RELEASE_COST:
-            total += HELD_RELEASE_COST
+        if keep > P["release"]:
+            total += P["release"]
             released.append(held_finger)
         else:
             total += keep

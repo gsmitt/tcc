@@ -37,6 +37,12 @@ import glob
 # exactly simultaneous).
 GROUP_EPS = 0.03
 
+# The test set of Nakamura, Saito & Yoshii (2020): pieces 001-030, each fingered
+# by four to six pianists.  Nothing in this project is fitted on them -- the
+# difficulty ceiling and the fitted weights (``otimizar.py``) come from the other
+# 120 pieces only -- so results on these 30 are out of sample.
+TEST_PIECES = frozenset(f"{i:03d}" for i in range(1, 31))
+
 _STEP = {"C": 0, "D": 2, "E": 4, "F": 5, "G": 7, "A": 9, "B": 11}
 
 

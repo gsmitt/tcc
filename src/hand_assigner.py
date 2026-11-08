@@ -81,15 +81,26 @@ def _emission(pitches, b, max_notes, max_span, cohesion_penalty):
 
 def assign_layers_to_hands(layers,
                            max_notes_per_hand=5,
-                           max_span_semitones=14,
-                           smooth_weight=0.6,
-                           cohesion_penalty=8.0,
+                           max_span_semitones=None,
+                           smooth_weight=None,
+                           cohesion_penalty=None,
                            seed_boundary=60.0):
     """Return a dict ``(layer_idx, note_idx_in_layer) -> "L" | "R"``.
 
     Every note of ``layers`` is labelled by the split-point DP described
-    in the module docstring.
+    in the module docstring.  ``None`` takes the value in force:
+    ``max_span_semitones`` is the absolute span of the 1-5 pair
+    (:data:`src.costs.MAX_ABS`), the widest a hand reaches, and the stability
+    and cohesion weights come from :mod:`src.params` (``smooth_split``,
+    ``cohesion_split``).
     """
+    from src import costs, params
+    if max_span_semitones is None:
+        max_span_semitones = costs.MAX_ABS[(1, 5)]
+    if smooth_weight is None:
+        smooth_weight = params.get("smooth_split")
+    if cohesion_penalty is None:
+        cohesion_penalty = params.get("cohesion_split")
     onsets = _onsets_from_layers(layers)
     if not onsets:
         return {}

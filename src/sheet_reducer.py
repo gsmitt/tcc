@@ -95,6 +95,7 @@ from dataclasses import dataclass, field
 
 from .assigners import get_assigner, split_layers_by_hands
 from .hands import DEFAULT_HANDS, validate
+from . import params
 from .solvers import get_solver
 from .difficulty import DEFAULT_DELTA_T, note_difficulties, window_whole_notes
 
@@ -113,21 +114,21 @@ DEFAULT_TEMPO_STEP = 0.1         # 10% of the nominal tempo per step
 # each hand and of both together, pooled over the 120 PIG pieces outside the
 # 30-piece test set of Nakamura, Saito & Yoshii (2020) (pieces 031-150), measured
 # from the notes alone -- no annotated fingering is used -- with the
-# ``joint-local`` assigner the reduction loop uses, Δt = 1 s, and PIG's
-# performance times read as whole notes of one second (bpm = 240):
+# ``joint-local`` assigner the reduction loop uses, Δt = 1 s, and PIG's times
+# read as whole notes of one second (bpm = 240).  It leaves nine onsets in ten of
+# those pieces alone and edits the hardest tenth; the asymmetry between the hands
+# comes from the data, not from a choice.
 #
-#       p50   p75   p85   p90   p95   p99
-#   D_L  8.0  21.0  34.0  44.0  61.2 136.0
-#   D_R 10.0  28.0  44.0  57.0  82.0 143.0
-#   D_B 23.0  52.0  73.0  89.0 123.0 209.0
-#
-# It leaves nine onsets in ten of those pieces alone and edits the hardest tenth;
-# the asymmetry between the hands comes from the data, not from a choice.  The
-# reduction results are reported on the 30 test pieces as well, which the
-# ceiling never saw.  Re-measure this block whenever the cost model, the window
-# or the time convention changes (``difficulty_profile``): the numbers do not
-# transfer across any of the three.
-DEFAULT_TARGET = (44.0, 57.0, 89.0)
+# The numbers depend on the cost model, so they are stored with the cost weights
+# they were measured with (src.params): (44, 57, 89) for the hand-picked weights,
+# re-measured by ``otimizar.py`` (``measure_ceiling``) after the weights are
+# fitted.  They do not transfer across a change of cost, window or time
+# convention.  ``default_target()`` returns the ceiling in force.
+def default_target():
+    return params.ceiling()
+
+
+DEFAULT_TARGET = params.HAND_PICKED_CEILING   # the hand-picked weights' ceiling
 
 
 @dataclass
@@ -337,7 +338,7 @@ def difficulty_profile(layers, *, bpm, delta_t=DEFAULT_DELTA_T, assigner="joint-
     return out
 
 
-def reduce_score(layers, target=DEFAULT_TARGET, *, bpm, a=0.01,
+def reduce_score(layers, target=None, *, bpm, a=0.01,
                  delta_t=DEFAULT_DELTA_T, max_iter=50, allow_octave_shift=True,
                  allow_tempo_reduction=True, tempo_floor=DEFAULT_TEMPO_FLOOR,
                  tempo_step=DEFAULT_TEMPO_STEP, assigner="joint-local",
@@ -384,6 +385,8 @@ def reduce_score(layers, target=DEFAULT_TARGET, *, bpm, a=0.01,
     if not 0.0 < tempo_step <= 1.0:
         raise ValueError(f"tempo_step must be in (0, 1], got {tempo_step!r}")
     hands = _two_hands(hands)
+    if target is None:
+        target = default_target()
 
     layers, multiplicity = condense(layers)
     deleted, shifted = [], []
