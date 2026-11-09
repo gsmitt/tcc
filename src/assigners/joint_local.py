@@ -3,7 +3,7 @@
 Same Viterbi-style split-point DP as :mod:`src.hand_assigner` -- a moving pitch
 boundary ``b`` per onset, with a hysteresis term ``smooth_weight * |b - b_prev|``
 seeded at ``seed_boundary`` -- but the per-onset *emission* is no longer the
-feasibility/cohesion proxy.  It is the **real ergonomic cost** of playing the
+feasibility proxy.  It is the **real ergonomic cost** of playing the
 onset on the two hands the boundary creates:
 
     emission(onset, b) =   min_fingers chord_complexity(left,  fingers, "L")
@@ -30,7 +30,7 @@ from itertools import combinations
 from src.costs import chord_complexity
 from src import params
 from src.hands import DEFAULT_HANDS
-from .base import HandAssigner, onsets_with_release
+from .base import HandAssigner, onsets_with_release, thumb_first
 
 FEAS_PENALTY = 1000.0   # a hand that cannot hold the notes (more than five keys)
 
@@ -89,8 +89,10 @@ class JointLocalAssigner(HandAssigner):
             key = (t, b)
             if key not in emit_cache:
                 notes = note_lists[t]
-                left = [ne for ne in notes if ne[0] < b]
-                right = [ne for ne in notes if ne[0] >= b]
+                # each hand's notes from its thumb side, so the ascending finger
+                # combinations put the thumb where it belongs
+                left = thumb_first([ne for ne in notes if ne[0] < b], low.side)
+                right = thumb_first([ne for ne in notes if ne[0] >= b], high.side)
                 emit_cache[key] = (_hand_cost(left, low.side, low.fingers)
                                    + _hand_cost(right, high.side, high.fingers))
             return emit_cache[key]

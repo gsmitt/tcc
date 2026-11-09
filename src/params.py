@@ -11,13 +11,37 @@ the grid each one is searched on, and the stage of ``otimizar.py`` that fits it:
   * stage ``cost``      -- the weights of the ergonomic cost, fitted with the
     annotators' own hands (assigner ``oracle``), so that they favour no hand
     assigner, maximising the mean M_gen over the training pieces;
-  * stage ``stability`` -- each assigner's boundary-stability weight, plus the
-    cohesion penalty only the ``split`` proxy uses, maximising the mean S_gen
-    (hand and finger must both agree), one assigner at a time.
+  * stage ``stability`` -- each assigner's boundary-stability weight,
+    maximising the mean S_gen (hand and finger must both agree), one assigner
+    at a time; with ``joint-full`` also the chord-span threshold and weight
+    (below).
+
+A fitted value replaces the starting one only when the gain is shown on the
+training pieces: the paired 95% bootstrap interval of the per-piece difference
+must lie above zero (``otimizar.py``).  A weight the data cannot tell apart from
+its starting value keeps the starting value.
 
 Both stages see only PIG pieces 031-150.  Pieces 001-030, the test set of
 Nakamura, Saito & Yoshii (2020), are never used to fit anything
 (:data:`src.pig_loader.TEST_PIECES`).
+
+Terms removed because the fit showed them to do nothing or to do harm (PIG
+031-150, 2026-11-08): the crossing penalty inside a chord, which never applies
+because every chord fingering is generated from the thumb side, so none is
+crossed (:func:`src.costs.chord_complexity` now rejects a crossed one); the
+constant base of the stretch cost, which the fit set to 0 and which 0 and 3 did
+not distinguish, so a stretch costs only its weight per semitone; and the
+``split`` proxy's penalty for splitting a chord one hand could take, which the
+fit set to 0 with a large gain in S_gen.
+
+The chord-span threshold and weight never change a fingering: the term depends
+only on the chord's pitches, the same for every fingering of it.  They act only
+on how the joint assigners divide the notes and on the difficulty measure, so
+the ``cost`` stage cannot fit them and they are not in :data:`COST_PARAMS`.
+They are fitted with ``joint-full``, the method itself, in its stability stage;
+``joint-local`` is fitted after it and uses the same values, so the cost model
+stays one for every assigner.  (Switching the term off lowered the S_gen of
+``joint-full`` by about half a point on the training pieces, so it is kept.)
 
 Chosen numbers that are *not* here, and why they are not fitted: the beam (32)
 and boundary window (6) of ``joint-full`` only trade time for exactness, so a
@@ -46,11 +70,9 @@ OPTIMIZED_FILE = os.path.join(ROOT, "parametros.json")
 # The values the project used before any fitting.
 HAND_PICKED = {
     # ergonomic cost (src.costs)
-    "crossing": 10.0,              # per pitch-adjacent chord pair whose fingers run against the pitches
     "chord_span_threshold": 7.0,   # total chord span (semitones) above which ...
     "chord_span_weight": 2.0,      # ... each extra semitone costs this much
-    "stretch_base": 3.0,           # a pair past its comfortable span costs base + ...
-    "stretch_weight": 3.0,         # ... weight per semitone past it
+    "stretch_weight": 3.0,         # a pair past its comfortable span, per semitone past it
     "release": 10.0,               # letting a held note go before its written end
     "untabulated_offset": 2.0,     # a move the tables do not cover costs span + offset
     "unison": 1.0,                 # a repeated note (span 0, not tabulated)
@@ -59,9 +81,12 @@ HAND_PICKED = {
     "smooth_split": 0.6,           # boundary stability, per semitone moved ...
     "smooth_local": 0.6,           # ... one weight per assigner
     "smooth_full": 0.6,
-    "cohesion_split": 8.0,         # split proxy: penalty for splitting a chord one hand could take
 }
-HAND_PICKED_CEILING = (44.0, 57.0, 89.0)   # (D_L, D_R, D_B), measured with HAND_PICKED
+# (D_L, D_R, D_B) measured with HAND_PICKED on this code, as ``otimizar.py``
+# measures it.  (The 44/57/89 of earlier drafts belong to the model before the
+# left-hand chord order was fixed in the joint assigners and before the three
+# terms above were removed.)
+HAND_PICKED_CEILING = (51.0, 36.0, 78.0)
 
 # Grid each parameter is searched on (the hand-picked value is always included).
 # The grid of each parameter.  A grid starts at 0 (the term switched off) or at
@@ -69,13 +94,13 @@ HAND_PICKED_CEILING = (44.0, 57.0, 89.0)   # (D_L, D_R, D_B), measured with HAND
 # warns when the best value is the largest one tried.  Two upper limits are set
 # by the model rather than by taste: ``release`` stays below 100, the cost of an
 # impossible stretch, so a held note beyond the absolute span is still released;
-# ``comfort_1_5`` stops at 13, the comfortable 1-5 span of Parncutt et al. (1997).
-_SMOOTH = [0, 0.1, 0.2, 0.4, 0.6, 0.8, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0]
+# ``comfort_1_5`` stops at 13, the comfortable 1-5 span of Parncutt et al. (1997)
+# (MaxComf; with the +2 the absolute span is then their MaxPrac of 15), so the
+# warning does not apply to it (``CAPPED``).
+_SMOOTH = [0, 0.1, 0.2, 0.4, 0.6, 0.8, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0, 24.0, 32.0]
 GRID = {
-    "crossing": [2, 4, 6, 8, 10, 12, 15, 20, 30],
     "chord_span_threshold": [5, 6, 7, 8, 9, 10, 12],
     "chord_span_weight": [0, 0.5, 1, 2, 3, 4, 6],
-    "stretch_base": [0, 1, 2, 3, 4, 6, 8],
     "stretch_weight": [0.5, 1, 2, 3, 4, 6],
     "release": [2, 4, 6, 8, 10, 12, 15, 20, 30, 40, 50, 60, 80],
     "untabulated_offset": [0, 1, 2, 3, 4, 6, 8],
@@ -84,17 +109,20 @@ GRID = {
     "smooth_split": _SMOOTH,
     "smooth_local": _SMOOTH,
     "smooth_full": _SMOOTH,
-    "cohesion_split": [0, 2, 4, 8, 12, 16, 24],
 }
 
-COST_PARAMS = ["crossing", "chord_span_threshold", "chord_span_weight",
-               "stretch_base", "stretch_weight", "release",
-               "untabulated_offset", "unison", "comfort_1_5"]
-STABILITY_PARAMS = {"split": ["smooth_split", "cohesion_split"],
-                    "joint-local": ["smooth_local"],
-                    "joint-full": ["smooth_full"]}
+CAPPED = {"comfort_1_5"}   # the largest grid value is a limit from the source
 
-# The live values: read directly (``params.VALUES["crossing"]``) by hot code.
+COST_PARAMS = ["stretch_weight", "release", "untabulated_offset", "unison",
+               "comfort_1_5"]
+STABILITY_PARAMS = {"split": ["smooth_split"],
+                    "joint-local": ["smooth_local"],
+                    "joint-full": ["smooth_full", "chord_span_threshold",
+                                   "chord_span_weight"]}
+# joint-full before joint-local: joint-local uses the chord-span values it fits
+STABILITY_ORDER = ["split", "joint-full", "joint-local"]
+
+# The live values: read directly (``params.VALUES["release"]``) by hot code.
 VALUES = dict(HAND_PICKED)
 CEILING = list(HAND_PICKED_CEILING)
 SOURCE = "hand-picked"

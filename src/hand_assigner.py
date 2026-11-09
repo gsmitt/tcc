@@ -17,15 +17,14 @@ onsets, minimising
 
     sum_t emission(onset_t, b_t)  +  sum_t smooth_weight * |b_t - b_{t-1}|
 
-where ``emission``
-
-  * softly forbids a hand that exceeds the ergonomic limits -- more than
-    ``max_notes_per_hand`` keys, or a stretch wider than ``max_span_semitones``;
-  * adds a ``cohesion_penalty`` when ``b`` splits an onset whose notes would all
-    fit one hand, so tight chords and octaves stay on one staff.
+where ``emission`` softly forbids a hand that exceeds the ergonomic limits --
+more than ``max_notes_per_hand`` keys, or a stretch wider than
+``max_span_semitones``.  (An earlier version also charged for splitting an onset
+whose notes would all fit one hand; fitted on PIG 031-150 its weight went to 0,
+with a large gain in agreement with the pianists, and the rule was removed.)
 
 The ``smooth_weight`` (hysteresis) term keeps ``b`` stable from onset to onset:
-absent a feasibility/cohesion reason to move, the boundary stays put, which is
+absent a feasibility reason to move, the boundary stays put, which is
 what stops a repeated pedal tone from flip-flopping between staves.  ``b`` is
 seeded at ``seed_boundary`` (≈ middle C) so the first division is the
 conventional one; thereafter it only moves when the music forces it.  (We use a
@@ -59,7 +58,7 @@ def _onsets_from_layers(layers):
             for li, layer in enumerate(layers) if layer["notes"]]
 
 
-def _emission(pitches, b, max_notes, max_span, cohesion_penalty):
+def _emission(pitches, b, max_notes, max_span):
     """Cost of splitting one onset's ascending ``pitches`` at boundary ``b``."""
     left = [p for p in pitches if p < b]
     right = [p for p in pitches if p >= b]
@@ -71,11 +70,6 @@ def _emission(pitches, b, max_notes, max_span, cohesion_penalty):
             cost += FEAS_PENALTY
         if hand[-1] - hand[0] > max_span:
             cost += FEAS_PENALTY
-    if left and right:                              # an actual split happened
-        fits_one = (len(pitches) <= max_notes
-                    and pitches[-1] - pitches[0] <= max_span)
-        if fits_one:                                # ...but it need not have
-            cost += cohesion_penalty
     return cost
 
 
@@ -83,7 +77,6 @@ def assign_layers_to_hands(layers,
                            max_notes_per_hand=5,
                            max_span_semitones=None,
                            smooth_weight=None,
-                           cohesion_penalty=None,
                            seed_boundary=60.0):
     """Return a dict ``(layer_idx, note_idx_in_layer) -> "L" | "R"``.
 
@@ -91,16 +84,13 @@ def assign_layers_to_hands(layers,
     in the module docstring.  ``None`` takes the value in force:
     ``max_span_semitones`` is the absolute span of the 1-5 pair
     (:data:`src.costs.MAX_ABS`), the widest a hand reaches, and the stability
-    and cohesion weights come from :mod:`src.params` (``smooth_split``,
-    ``cohesion_split``).
+    weight comes from :mod:`src.params` (``smooth_split``).
     """
     from src import costs, params
     if max_span_semitones is None:
         max_span_semitones = costs.MAX_ABS[(1, 5)]
     if smooth_weight is None:
         smooth_weight = params.get("smooth_split")
-    if cohesion_penalty is None:
-        cohesion_penalty = params.get("cohesion_split")
     onsets = _onsets_from_layers(layers)
     if not onsets:
         return {}
@@ -114,7 +104,7 @@ def assign_layers_to_hands(layers,
 
     def emit(t, b):
         return _emission(pitch_lists[t], b, max_notes_per_hand,
-                         max_span_semitones, cohesion_penalty)
+                         max_span_semitones)
 
     # Forward pass. dp[k] = best cost of reaching this onset with boundaries[k];
     # back[t-1][k] = the previous onset's boundary index chosen to reach k here.

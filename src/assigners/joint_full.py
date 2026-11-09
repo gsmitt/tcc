@@ -62,7 +62,7 @@ from src.costs import (
 )
 from src.hands import DEFAULT_HANDS
 from src import params
-from .base import HandAssigner, onsets_with_release
+from .base import HandAssigner, onsets_with_release, thumb_first
 
 FREE = ((0, 0),) * 5     # (release time, pitch) per finger when a hand starts empty
 
@@ -145,9 +145,14 @@ class JointFullAssigner(HandAssigner):
         W = self.boundary_window
 
         def bands_of(notes, cut_row, b_tuple):
-            """Slice an onset's pitch-sorted notes into H bands by b_tuple."""
+            """Slice an onset's pitch-sorted notes into H bands by b_tuple.
+
+            Each band is returned from its hand's thumb side (descending for a
+            left-side hand), the order the ascending finger combinations of
+            ``hand_steps`` and the transition pairing assume.
+            """
             ps = [0] + [cut_row[c] for c in b_tuple] + [len(notes)]
-            return [notes[ps[j]:ps[j + 1]] for j in range(H)]
+            return [thumb_first(notes[ps[j]:ps[j + 1]], sides[j]) for j in range(H)]
 
         def b_tuples(centers):
             """Non-decreasing boundary index tuples, each within W of its center

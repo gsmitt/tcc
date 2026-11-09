@@ -15,7 +15,7 @@ number of hands -- the boundaries it places fall between consecutive hands; the
 proxy baselines (``split``, ``joint-local``) remain two-hand references.
 
 The split-point assigner (:mod:`src.assigners.split_point`) chooses the staff
-with an ergonomic *proxy* (feasibility + cohesion).  The joint assigners
+with an ergonomic *proxy* (feasibility only).  The joint assigners
 (:mod:`src.assigners.joint_local`, :mod:`src.assigners.joint_full`) instead score
 each candidate split with the *real* fingering cost of :mod:`src.costs`, coupling
 hand assignment to the fingering it forces -- the project's original
@@ -48,6 +48,20 @@ class HandAssigner(ABC):
     def assign(self) -> dict:
         """Return ``{(layer_idx, note_idx_in_layer): hand.name}``."""
         ...
+
+
+def thumb_first(notes, side):
+    """``notes`` (``(pitch, end)`` pairs) ordered from the thumb side of a hand.
+
+    The thumb sits on the lowest key of a right-side hand and on the highest of a
+    left-side one.  The fingerings the assigners try come from
+    ``itertools.combinations``, which yields fingers in ascending order, so the
+    notes must be in this order for finger 1 to land on the thumb-side note, as
+    in the solvers (:func:`src.hand_assigner.split_layers_by_hands`) and as
+    :func:`src.costs.chord_complexity` and
+    :func:`src.costs.fingering_transition_cost` expect.
+    """
+    return sorted(notes, key=lambda ne: ne[0], reverse=(side == "L"))
 
 
 def onsets_with_release(layers):

@@ -96,7 +96,7 @@ As opções ficam em constantes no topo do `main.py`:
 | `ASSIGNER` | Variante de atribuição de mãos: `"split"`, `"joint-local"` ou `"joint-full"` | `"joint-full"` |
 | `SOLVER` | Busca do dedilhado: `"viterbi"` (exata, a usada no trabalho), `"dynamic"` ou `"graph"` (buscas em profundidade, exponenciais, só para comparação) | `"viterbi"` |
 | `REDUCE` | Reduzir a dificuldade antes de dedilhar | `True` |
-| `TARGET` | Tetos de dificuldade da mão esquerda, da direita e das duas juntas, em custo por segundo | `(44, 57, 89)` |
+| `TARGET` | Tetos de dificuldade da mão esquerda, da direita e das duas juntas, em custo por segundo | `None`: o teto em vigor, do `parametros.json` |
 | `HANDS` | Mãos para as quais a peça é dedilhada | duas mãos completas |
 | `SLICE` | Número máximo de camadas lidas do arquivo | `2000` |
 
@@ -219,13 +219,15 @@ python otimizar.py ceiling                             # só a nova medição do
 
 | Etapa | O que ajusta | Como |
 |---|---|---|
-| `cost` | pesos do custo ergonômico: cruzamento, abertura total do acorde, esticar além do confortável, soltar uma nota presa, movimentos fora das tabelas, uníssono e limite do par 1-5 | com as mãos anotadas no PIG, para não favorecer nenhuma variante, maximizando $M_{gen}$ |
-| `stability` | o peso de estabilidade da fronteira de cada variante (e a penalidade de acorde separado do `split`) | com cada variante, maximizando $S_{gen}$, em que mão e dedo precisam coincidir |
+| `cost` | pesos do custo ergonômico: esticar além do confortável, soltar uma nota presa, movimentos fora das tabelas, uníssono e limite do par 1-5 | com as mãos anotadas no PIG, para não favorecer nenhuma variante, maximizando $M_{gen}$ |
+| `stability` | o peso de estabilidade da fronteira de cada variante; no `joint-full`, também o limiar e o peso da abertura total do acorde, que não mudam o dedilhado, só a divisão entre as mãos | com cada variante, maximizando $S_{gen}$, em que mão e dedo precisam coincidir; o `joint-full` vem antes do `joint-local`, que usa os mesmos valores do acorde |
 | `ceiling` | o teto de dificuldade | não é ajuste: mede de novo o percentil 90 da dificuldade com os pesos novos e o `joint-local`; toda execução termina com essa medição |
 
 A busca é por coordenadas: a partir dos valores escolhidos à mão, cada rodada testa todos os
-valores da grade de um parâmetro, com os outros fixos, e fica com o melhor; para quando uma
-rodada inteira não muda nada. As peças são avaliadas em paralelo (`--processes`), e cada
+valores da grade de um parâmetro, com os outros fixos. O valor de melhor média só substitui o
+atual se o ganho, peça a peça, tiver intervalo de confiança de 95% acima de zero; um peso que
+os dados não distinguem do valor de partida fica com ele. A busca para quando uma rodada
+inteira não muda nada. As peças são avaliadas em paralelo (`--processes`), e cada
 combinação é avaliada uma vez só. Quando o melhor valor de um parâmetro é o maior da grade,
 o programa avisa e registra isso no `parametros.json`, porque o melhor valor pode estar além
 dela.
@@ -240,7 +242,10 @@ python evaluate.py --params hand-picked pig --assigner joint-full
 
 Os valores de partida, as grades e os motivos para não ajustar os demais números (feixe,
 janela, parâmetros da redução e da gravação, e os valores que representam "impossível")
-estão em `src/params.py`. Cada tentativa fica registrada em `output/otimizacao/`.
+estão em `src/params.py`. Lá também estão os três termos retirados do modelo porque o ajuste
+mostrou que não faziam nada ou atrapalhavam: a penalidade de cruzamento dentro do acorde
+(nenhum dedilhado de acorde gerado é cruzado), a parcela fixa do custo de esticar e a
+penalidade do `split` por separar um acorde que cabe numa mão. Cada tentativa fica registrada em `output/otimizacao/`.
 
 ## Organização do código
 

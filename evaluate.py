@@ -512,6 +512,7 @@ def run_selftest():
     check_duet_end_to_end()
     check_reduce_missing_finger()
     check_params_and_split()
+    check_thumb_side_order()
     check_pig_identity()
 
 
@@ -702,19 +703,20 @@ def check_duet_end_to_end(midi_path="data/mond_1.mid", n_layers=60):
 def check_params_and_split(root=DEFAULT_PIG_ROOT):
     """The fitted weights reach the cost, and the fit never sees a test piece.
 
-    Raising the crossing weight by 5 must raise the cost of a chord with two
-    inverted pairs by exactly 10, and restoring the values must restore it.  The
-    optimiser's training set must be the 120 PIG pieces outside 001-030.
+    A major third on fingers 2-3 is one semitone past that pair's comfortable
+    span, so raising the stretch weight by 5 must raise the chord's cost by
+    exactly 5, and restoring the values must restore it.  The optimiser's
+    training set must be the 120 PIG pieces outside 001-030.
     """
     saved = params.current()
-    chord = [(60, 1.0), (64, 1.0), (67, 1.0)]
-    base = costs.chord_complexity(chord, (3, 2, 1), "R")
-    params.set(crossing=saved["values"]["crossing"] + 5)
+    chord = [(60, 1.0), (64, 1.0)]
+    base = costs.chord_complexity(chord, (2, 3), "R")
+    params.set(stretch_weight=saved["values"]["stretch_weight"] + 5)
     try:
-        assert abs(costs.chord_complexity(chord, (3, 2, 1), "R") - base - 10) < 1e-9
+        assert abs(costs.chord_complexity(chord, (2, 3), "R") - base - 5) < 1e-9
     finally:
         params.set(ceiling=saved["ceiling"], **saved["values"])
-    assert costs.chord_complexity(chord, (3, 2, 1), "R") == base
+    assert costs.chord_complexity(chord, (2, 3), "R") == base
     if os.path.isdir(root):
         import otimizar
         ids = [p for p, _ in otimizar.training_pieces(root)]
@@ -724,12 +726,48 @@ def check_params_and_split(root=DEFAULT_PIG_ROOT):
         print("OK: fitted weights reach the cost (split check skipped: no PIG)")
 
 
+def check_thumb_side_order():
+    """The joint assigners try each hand's chords from its thumb side.
+
+    Their fingerings come from ascending finger combinations, so a left hand's
+    notes must reach them highest first; otherwise every left-hand chord is
+    scored with the thumb on its lowest key, crossed on every pair, which
+    :func:`src.costs.chord_complexity` rejects.  With left-hand triads under a
+    right-hand melody, ``joint-local`` and ``joint-full`` must run and keep every
+    triad note in the left hand; and a crossed fingering must be rejected.
+    """
+    triads = [(48, 52, 55), (53, 57, 60), (55, 59, 62), (48, 52, 55)]
+    melody = [72, 74, 76, 77, 79, 77, 76, 74]
+    layers, t = [], 0.0
+    for i, m in enumerate(melody):
+        notes = [(m, t + 0.5)]
+        if i % 2 == 0:
+            notes += [(p, t + 1.0) for p in triads[i // 2]]
+        layers.append({"time": t, "notes": notes})
+        t += 0.5
+    for name in ("joint-local", "joint-full"):
+        split = get_assigner(name)(layers).assign()
+        for li, layer in enumerate(layers):
+            for ni, (p, _e) in enumerate(layer["notes"]):
+                if p < 64:
+                    assert split[(li, ni)] == "L", (name, li, p)
+    try:
+        costs.chord_complexity([(48, 1.0), (52, 1.0), (55, 1.0)], (1, 3, 5), "L")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("a crossed left-hand fingering was accepted")
+    print("OK: joint assigners try each hand's chords from its thumb side")
+
+
 def check_reduce_missing_finger(midi_path="data/mond_1.mid", n_layers=60):
     """The reducer measures the hands it is given, fingers missing or not.
 
     A right hand with only fingers 1-3 must be reduced to the same ceiling with
-    those fingers alone: no onset left above it and no other finger used.  A
-    duet is refused: the difficulty triplet belongs to one player's two hands.
+    those fingers alone: no onset left above it and no other finger used.  The
+    ceiling is half the one in force, so that the passage has to be edited and
+    the check is never vacuous.  A duet is refused: the difficulty triplet
+    belongs to one player's two hands.
     """
     if not os.path.exists(midi_path):
         print(f"skip: reducer check needs {midi_path}")
@@ -737,15 +775,17 @@ def check_reduce_missing_finger(midi_path="data/mond_1.mid", n_layers=60):
     from src.sheet_reducer import _measure
     layers, tempo = read_midi(midi_path)
     layers = layers[:n_layers]
-    full = reduce_score(layers, bpm=tempo.bpm)
+    target = tuple(0.5 * c for c in default_target())
+    full = reduce_score(layers, target, bpm=tempo.bpm)
     hands = [Hand("L", "L", register=53.0),
              Hand("R", "R", fingers=(1, 2, 3), register=67.0)]
-    red = reduce_score(layers, bpm=tempo.bpm, hands=hands)
+    red = reduce_score(layers, target, bpm=tempo.bpm, hands=hands)
+    assert red.deleted or red.shifted or red.tempo_factor < 1, "nothing was edited"
     _labels, diffs, _lh, rh, _lhl, _rhl = _measure(
         red.layers, DEFAULT_DELTA_T, "joint-local", tempo.bpm * red.tempo_factor, hands)
     used = {f for _notes, fs in rh.path for f in fs}
     assert used <= {1, 2, 3}, f"three-finger hand used fingers {used}"
-    tl, tr, tb = default_target()
+    tl, tr, tb = target
     assert all(dl <= tl and dr <= tr and db <= tb for dl, dr, db in diffs), \
         "reduced score left above the ceiling for the three-finger hand"
     duet = [Hand("S-L", "L", register=41.0), Hand("S-R", "R", register=53.0),
@@ -758,7 +798,7 @@ def check_reduce_missing_finger(midi_path="data/mond_1.mid", n_layers=60):
         raise AssertionError("the reducer should refuse four hands")
     print(f"OK: reducer with a three-finger right hand ({len(red.deleted)} deleted, "
           f"{len(red.shifted)} shifted vs {len(full.deleted)}/{len(full.shifted)} "
-          f"for a full hand); duet refused")
+          f"for a full hand, ceiling halved); duet refused")
 
 
 # --------------------------------------------------------------------------- #

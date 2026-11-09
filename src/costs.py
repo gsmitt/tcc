@@ -54,9 +54,16 @@ sanctioned by the source: it defines MaxPrac as the largest stretch a pianist
 would use "to span two notes played either simultaneously or consecutively in
 finger legato", despite the paper being about melodic fragments.
 
-The structural weights (crossing penalty, chord-span threshold and coefficient,
-stretch base and coefficient) are hand-picked, not fitted to annotated data; PIG
-is used for evaluation only.
+The weights this project chose (chord-span threshold and coefficient, the
+stretch coefficient, the release cost, the untabulated and unison costs, the 1-5
+comfortable span) live in :mod:`src.params`; ``otimizar.py`` fits the ones the
+fingering depends on, on PIG pieces 031-150 only.
+
+**No crossing inside a chord.** Every caller generates a chord's fingering from
+its thumb side with ascending fingers (``itertools.combinations``), so a crossed
+chord fingering is never tried; :func:`chord_complexity` rejects one instead of
+pricing it, since it can only come from a caller that passed the notes in the
+wrong order.
 
 **Held notes.** A layer holds only the notes that *start* there, so a note still
 sounding from an earlier layer is outside `chord_complexity`. `held_reach_cost`
@@ -76,7 +83,7 @@ threshold.
 
 MAX_MOVE_COST_HARD = 100
 
-# Weights chosen by this project, not by a source (crossing, chord span, stretch,
+# Weights chosen by this project, not by a source (chord span, stretch,
 # release, untabulated moves, unison, the 1-5 comfortable span) live in
 # :mod:`src.params`, where ``otimizar.py`` fits them; ``P`` is the live dict.
 from src.params import VALUES as P
@@ -227,7 +234,7 @@ def _stretch_cost(finger_a, finger_b, span):
     if span > absol:
         return MAX_MOVE_COST_HARD
     if span > comfort:
-        return P["stretch_base"] + (span - comfort) * P["stretch_weight"]
+        return (span - comfort) * P["stretch_weight"]
     return None
 
 
@@ -284,14 +291,13 @@ def chord_complexity(notes, fingers, hand="R"):
     total_cost = 0
     max_span = abs(combined[-1][0][0] - combined[0][0][0])
 
-    # 1. Penalize finger crossings: each pitch-adjacent pair whose fingers run
-    #    against the pitch order.  (Fingers within a chord are always distinct --
-    #    solvers draw them from combinations() -- so this is a strict inversion.)
+    # 1. No crossing: from the thumb side, the fingers must ascend (module
+    #    docstring).  A crossed fingering means the caller ordered the notes
+    #    wrongly, so it is an error, not a cost.
     for i in range(len(combined) - 1):
-        _, f_a = combined[i]
-        _, f_b = combined[i + 1]
-        if f_a > f_b:
-            total_cost += P["crossing"]
+        if combined[i][1] > combined[i + 1][1]:
+            raise ValueError(f"crossed chord fingering {fingers} for {notes} ({hand}): "
+                             "fingers must ascend from the thumb side")
 
     # 2. Penalize wide spans (thumb–pinky distance); beyond the widest pair's
     #    absolute limit no fingering reaches the chord.

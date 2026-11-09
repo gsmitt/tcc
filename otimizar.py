@@ -5,17 +5,20 @@ searched on are in :mod:`src.params`, with the reasons why the remaining chosen
 numbers are not fitted.  Pieces 001-030, the test set of Nakamura, Saito &
 Yoshii (2020), are never loaded here (:data:`src.pig_loader.TEST_PIECES`).
 
-Stages, run in this order by ``all`` (``cost``, ``stability`` for each assigner,
-then ``ceiling``):
+Stages, run in this order by ``all`` (``cost``, ``stability`` for ``split``,
+``joint-full`` and ``joint-local``, then ``ceiling``):
 
   * ``cost``      -- the weights of the ergonomic cost, with the annotators' own
                      hands (assigner ``oracle``: only the fingering is chosen),
                      so they favour no hand assigner; maximises the mean M_gen
                      over the 120 training pieces.
-  * ``stability`` -- the boundary-stability weight of one assigner (``--variant``;
-                     for ``split`` also its cohesion penalty), with the fitted
-                     cost weights; maximises the mean S_gen, where hand and
-                     finger must both agree.
+  * ``stability`` -- the boundary-stability weight of one assigner
+                     (``--variant``), with the fitted cost weights; maximises
+                     the mean S_gen, where hand and finger must both agree.
+                     With ``joint-full`` it also fits the chord-span threshold
+                     and weight, which change no fingering, only how the notes
+                     are divided between the hands; ``joint-local`` comes after
+                     and uses them.
   * ``ceiling``   -- re-measures the difficulty ceiling with the weights in
                      force: the 90th percentile of the per-onset difficulty of
                      each hand and of both, pooled over the training pieces,
@@ -24,13 +27,19 @@ then ``ceiling``):
                      ``smooth_local``, so every run ends with it.
 
 Search: coordinate descent.  Starting from the hand-picked values, each round
-tries every grid value of each parameter in turn, the others held fixed, and
-keeps the best (a tie keeps the current value); it stops after a round that
-changes nothing, or after ``--rounds`` rounds.  A best value that is the largest
-one on its grid is reported (and recorded in ``parametros.json``): the best
-setting may lie beyond the grid, which should then be extended.  Every trial is the mean of the
-metric over the training pieces, evaluated in parallel (``--processes``), and
-cached, so no setting is scored twice.
+takes the parameters in turn and scores every value on the grid of one, the
+others held fixed.  The value with the best mean replaces the current one only
+if the gain is shown: the 95% bootstrap interval of the per-piece difference
+(paired, over the training pieces) must lie above zero.  So a weight the data
+cannot tell apart from its starting value keeps it.  (The best of a grid is
+chosen before it is tested, which the interval does not correct for; the
+requirement is a guard against moving on noise, not a significance test of the
+final values.)  The search stops after a round that changes nothing, or after
+``--rounds`` rounds.  A value that ends at the largest one on its grid is
+reported (and recorded in ``parametros.json``): the best setting may lie beyond
+the grid, which should then be extended.  Every trial is the mean of the metric
+over the training pieces, evaluated in parallel (``--processes``), and cached,
+so no setting is scored twice.
 
 Output: ``parametros.json`` at the repository root (the values, the ceiling and
 how they were obtained), which ``main.py`` and ``evaluate.py`` then use by
@@ -50,6 +59,7 @@ import csv
 import datetime
 import multiprocessing
 import os
+import random
 import sys
 import time
 
@@ -102,7 +112,11 @@ def _piece_difficulties(task):
 # --------------------------------------------------------------------------- #
 
 class Scorer:
-    """Mean of one metric over the training pieces, for a given setting."""
+    """One metric over the training pieces, for a given setting.
+
+    Calling it gives the mean; :meth:`per_piece` gives the score of each piece
+    (``None`` where the piece could not be scored), in the order of ``pieces``.
+    """
 
     def __init__(self, pieces, assigner, metric, pool, log_path):
         self.pieces, self.assigner, self.metric = pieces, assigner, metric
@@ -111,18 +125,20 @@ class Scorer:
         os.makedirs(os.path.dirname(log_path), exist_ok=True)
         self._log_header = not os.path.exists(log_path)
 
-    def __call__(self, values):
+    def per_piece(self, values):
         key = tuple(sorted(values.items()))
-        if key in self.cache:
-            return self.cache[key]
-        t0 = time.time()
-        tasks = [(paths, self.assigner, values, self.metric) for _p, paths in self.pieces]
-        scores = [s for s in self.pool.map(_score_piece, tasks) if s is not None]
-        mean = sum(scores) / len(scores)
-        self.cache[key] = mean
-        self.trials += 1
-        self._log(values, mean, len(scores), time.time() - t0)
-        return mean
+        if key not in self.cache:
+            t0 = time.time()
+            tasks = [(paths, self.assigner, values, self.metric) for _p, paths in self.pieces]
+            self.cache[key] = self.pool.map(_score_piece, tasks)
+            self.trials += 1
+            scored = [x for x in self.cache[key] if x is not None]
+            self._log(values, sum(scored) / len(scored), len(scored), time.time() - t0)
+        return self.cache[key]
+
+    def __call__(self, values):
+        scored = [x for x in self.per_piece(values) if x is not None]
+        return sum(scored) / len(scored)
 
     def _log(self, values, mean, n, seconds):
         names = sorted(values)
@@ -136,34 +152,77 @@ class Scorer:
                         f"{seconds:.1f}"] + [values[k] for k in names])
 
 
+BOOTSTRAP = 5000      # resamples of the paired bootstrap
+
+
+def paired_gain(before, after, resamples=BOOTSTRAP, seed=0):
+    """Mean per-piece gain of ``after`` over ``before`` and its 95% interval.
+
+    Pieces scored in both only.  Percentile bootstrap over the pieces, with a
+    fixed seed so the decision is reproducible.
+    """
+    d = [b - a for a, b in zip(before, after) if a is not None and b is not None]
+    n = len(d)
+    rng = random.Random(seed)
+    means = sorted(sum(d[rng.randrange(n)] for _ in range(n)) / n
+                   for _ in range(resamples))
+    return sum(d) / n, means[int(0.025 * resamples)], means[int(0.975 * resamples) - 1]
+
+
 def coordinate_descent(score, start, names, rounds):
-    """Best values for ``names`` (the others fixed at ``start``), and its score."""
+    """Fitted values for ``names`` (the others fixed at ``start``).
+
+    Returns ``(values, first_score, final_score, rounds_used, decisions)``, with
+    one decision per parameter and round whose best grid value differed from
+    the current one: the values, the gain, its interval and whether it was taken.
+    """
     best = dict(start)
-    best_score = score(best)
-    first_score = best_score
+    first_score = score(best)
+    decisions = []
     for r in range(1, rounds + 1):
         changed = False
         for name in names:
             grid = sorted(set(params.GRID[name]) | {best[name]})
+            means = {}
             for v in grid:
-                trial = {**best, name: float(v)}
-                s = score(trial)
-                print(f"  round {r}  {name:22s} = {v:<6g} {score.metric} = {s:.5f}"
-                      f"{'  *' if s > best_score + 1e-12 else ''}", flush=True)
-                if s > best_score + 1e-12:
-                    best, best_score, changed = trial, s, True
+                means[v] = score({**best, name: float(v)})
+                print(f"  round {r}  {name:22s} = {v:<6g} {score.metric} = {means[v]:.5f}",
+                      flush=True)
+            # best mean; on a tie, the value nearest the current one
+            cand = max(grid, key=lambda v: (means[v], -abs(v - best[name])))
+            if float(cand) == best[name]:
+                continue
+            trial = {**best, name: float(cand)}
+            gain, lo, hi = paired_gain(score.per_piece(best), score.per_piece(trial))
+            taken = lo > 0
+            print(f"  round {r}  {name}: {best[name]:g} -> {cand:g}  gain {gain:+.5f} "
+                  f"[{lo:+.5f}, {hi:+.5f}]  {'TAKEN' if taken else 'kept ' + format(best[name], 'g')}",
+                  flush=True)
+            decisions.append({"round": r, "parameter": name, "from": best[name],
+                              "best_on_grid": float(cand), "gain": round(gain, 6),
+                              "ci95": [round(lo, 6), round(hi, 6)], "taken": taken})
+            if taken:
+                best, changed = trial, True
         if not changed or len(names) == 1:     # one parameter: one round suffices
             break
-    return best, first_score, best_score, r
+    return best, first_score, score(best), r, decisions
 
 
 def at_upper_edge(values, names):
-    """The parameters whose value is the largest on their grid."""
+    """The parameters whose value is the largest on their grid.
+
+    A parameter in :data:`src.params.CAPPED` is left out: its largest grid value
+    is a limit taken from the source, so the best value cannot lie beyond it.
+    """
     edge = [n for n in names if values[n] >= max(params.GRID[n])]
     for n in edge:
-        print(f"WARNING: {n} = {values[n]:g} is the largest value on its grid; "
-              f"the best value may lie beyond it", flush=True)
-    return edge
+        if n in params.CAPPED:
+            print(f"note: {n} = {values[n]:g} is at the limit of its grid, set by "
+                  f"the source", flush=True)
+        else:
+            print(f"WARNING: {n} = {values[n]:g} is the largest value on its grid; "
+                  f"the best value may lie beyond it", flush=True)
+    return [n for n in edge if n not in params.CAPPED]
 
 
 def measure_ceiling(pieces, values, pool):
@@ -205,14 +264,19 @@ def _save(values, ceiling, stages):
     print(f"wrote {os.path.relpath(params.OPTIMIZED_FILE, ROOT)}")
 
 
+SEARCH = ("coordinate descent; a value is taken only if the paired 95% bootstrap "
+          f"interval ({BOOTSTRAP} resamples) of its per-piece gain lies above zero")
+
+
 def stage_cost(pieces, pool, rounds):
     values, ceiling, stages = _load_existing()
     start = {**values, **{k: params.HAND_PICKED[k] for k in params.COST_PARAMS}}
     score = Scorer(pieces, "oracle", "M_gen", pool, os.path.join(LOG_DIR, "custo.csv"))
     print(f"cost stage: {len(params.COST_PARAMS)} parameters, assigner oracle, M_gen")
-    best, before, after, used = coordinate_descent(score, start, params.COST_PARAMS, rounds)
-    stages["cost"] = {"metric": "M_gen", "assigner": "oracle", "search": "coordinate descent",
-                      "rounds": used, "trials": score.trials,
+    best, before, after, used, decisions = coordinate_descent(score, start,
+                                                              params.COST_PARAMS, rounds)
+    stages["cost"] = {"metric": "M_gen", "assigner": "oracle", "search": SEARCH,
+                      "rounds": used, "trials": score.trials, "decisions": decisions,
                       "start": {k: start[k] for k in params.COST_PARAMS},
                       "score_start": round(before, 6), "score_best": round(after, 6),
                       "at_upper_edge": at_upper_edge(best, params.COST_PARAMS)}
@@ -239,10 +303,10 @@ def stage_stability(pieces, pool, variant, rounds):
     score = Scorer(pieces, variant, "S_gen", pool,
                    os.path.join(LOG_DIR, f"estabilidade-{variant}.csv"))
     print(f"stability stage: {names}, assigner {variant}, S_gen")
-    best, before, after, used = coordinate_descent(score, start, names, rounds)
+    best, before, after, used, decisions = coordinate_descent(score, start, names, rounds)
     stages[f"stability/{variant}"] = {"metric": "S_gen", "assigner": variant,
-                                      "search": "coordinate descent", "rounds": used,
-                                      "trials": score.trials,
+                                      "search": SEARCH, "rounds": used,
+                                      "trials": score.trials, "decisions": decisions,
                                       "start": {k: start[k] for k in names},
                                       "score_start": round(before, 6),
                                       "score_best": round(after, 6),
@@ -283,7 +347,7 @@ def main():
     if args.stage in ("all", "cost"):
         with pool_for("oracle") as pool:
             stage_cost(pieces, pool, args.rounds)
-    variants = (["split", "joint-local", "joint-full"] if args.stage == "all"
+    variants = (params.STABILITY_ORDER if args.stage == "all"
                 else [args.variant] if args.stage == "stability" else [])
     for v in variants:
         with pool_for(v) as pool:

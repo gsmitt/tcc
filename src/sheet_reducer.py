@@ -120,7 +120,7 @@ DEFAULT_TEMPO_STEP = 0.1         # 10% of the nominal tempo per step
 # comes from the data, not from a choice.
 #
 # The numbers depend on the cost model, so they are stored with the cost weights
-# they were measured with (src.params): (44, 57, 89) for the hand-picked weights,
+# they were measured with (src.params): (51, 36, 78) for the hand-picked weights,
 # re-measured by ``otimizar.py`` (``measure_ceiling``) after the weights are
 # fitted.  They do not transfer across a change of cost, window or time
 # convention.  ``default_target()`` returns the ceiling in force.

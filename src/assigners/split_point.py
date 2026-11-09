@@ -2,8 +2,8 @@
 
 Thin wrapper over :func:`src.hand_assigner.assign_layers_to_hands`, which decides
 each note's staff with a moving pitch boundary chosen by a Viterbi-style DP whose
-emission is an ergonomic *proxy* (a soft feasibility penalty plus a chord-cohesion
-penalty) -- see that module's docstring for the full model and sources.
+emission is an ergonomic *proxy* (a soft feasibility penalty: keys and span
+per hand) -- see that module's docstring for the full model and sources.
 
 Kept behaviourally identical to the standalone function so it is an unchanged
 baseline for the joint assigners to be compared against.

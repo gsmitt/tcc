@@ -1,82 +1,245 @@
 {
   "values": {
-    "crossing": 10.0,
     "chord_span_threshold": 7.0,
     "chord_span_weight": 2.0,
-    "stretch_base": 0.0,
-    "stretch_weight": 2.0,
-    "release": 50.0,
+    "stretch_weight": 3.0,
+    "release": 10.0,
     "untabulated_offset": 2.0,
-    "unison": 2.0,
+    "unison": 1.0,
     "comfort_1_5": 13.0,
-    "smooth_split": 0.2,
-    "smooth_local": 16.0,
-    "smooth_full": 0.6,
-    "cohesion_split": 0.0
+    "smooth_split": 0.6,
+    "smooth_local": 4.0,
+    "smooth_full": 2.0
   },
   "ceiling": [
-    44.0,
-    57.0,
-    89.0
+    47.0,
+    36.0,
+    75.6
   ],
   "meta": {
-    "updated": "2026-11-08T12:03:04",
-    "git_commit": "d6131b9fa8c1c338f99c1cbbfaf26771a888302b",
-    "code_fingerprint": "2cad34d715f4b2585ee0fee7b6e497bfb162157aaf19831999f159326783bb93",
+    "updated": "2026-11-08T22:32:19",
+    "git_commit": "9bc3ac68fdd77e9eb38b105041094a4a3cfa4a64",
+    "code_fingerprint": "113f9706ca46f41252f7927636caacc86c3f13637113ded66237fa9f0a0a4bb5",
     "training_pieces": "PIG 031-150 (120 pieces)",
     "excluded_pieces": "PIG 001-030, the test set of Nakamura, Saito & Yoshii (2020)",
     "stages": {
       "cost": {
         "metric": "M_gen",
         "assigner": "oracle",
-        "search": "coordinate descent",
-        "rounds": 3,
-        "trials": 160,
+        "search": "coordinate descent; a value is taken only if the paired 95% bootstrap interval (5000 resamples) of its per-piece gain lies above zero",
+        "rounds": 2,
+        "trials": 56,
+        "decisions": [
+          {
+            "round": 1,
+            "parameter": "release",
+            "from": 10.0,
+            "best_on_grid": 30.0,
+            "gain": 0.000962,
+            "ci95": [
+              -0.000983,
+              0.003173
+            ],
+            "taken": false
+          },
+          {
+            "round": 1,
+            "parameter": "unison",
+            "from": 1.0,
+            "best_on_grid": 3.0,
+            "gain": 0.003494,
+            "ci95": [
+              -0.000504,
+              0.007506
+            ],
+            "taken": false
+          },
+          {
+            "round": 1,
+            "parameter": "comfort_1_5",
+            "from": 12.0,
+            "best_on_grid": 13.0,
+            "gain": 0.001028,
+            "ci95": [
+              0.000368,
+              0.001917
+            ],
+            "taken": true
+          },
+          {
+            "round": 2,
+            "parameter": "release",
+            "from": 10.0,
+            "best_on_grid": 30.0,
+            "gain": 0.001135,
+            "ci95": [
+              -0.001271,
+              0.003781
+            ],
+            "taken": false
+          },
+          {
+            "round": 2,
+            "parameter": "unison",
+            "from": 1.0,
+            "best_on_grid": 3.0,
+            "gain": 0.003477,
+            "ci95": [
+              -0.000512,
+              0.007482
+            ],
+            "taken": false
+          }
+        ],
         "start": {
-          "crossing": 10.0,
-          "chord_span_threshold": 7.0,
-          "chord_span_weight": 2.0,
-          "stretch_base": 3.0,
           "stretch_weight": 3.0,
           "release": 10.0,
           "untabulated_offset": 2.0,
           "unison": 1.0,
           "comfort_1_5": 12.0
         },
-        "score_start": 0.623196,
-        "score_best": 0.631103,
-        "at_upper_edge": [
-          "comfort_1_5"
+        "score_start": 0.624843,
+        "score_best": 0.625871,
+        "at_upper_edge": []
+      },
+      "ceiling": {
+        "what": "p90 of per-onset D_L, D_R, D_B pooled over the training pieces, notes only, joint-local, bpm 240, window 1 s",
+        "value": [
+          47.0,
+          36.0,
+          75.6
         ]
       },
       "stability/split": {
         "metric": "S_gen",
         "assigner": "split",
-        "search": "coordinate descent",
-        "rounds": 3,
-        "trials": 40,
+        "search": "coordinate descent; a value is taken only if the paired 95% bootstrap interval (5000 resamples) of its per-piece gain lies above zero",
+        "rounds": 1,
+        "trials": 17,
+        "decisions": [
+          {
+            "round": 1,
+            "parameter": "smooth_split",
+            "from": 0.6,
+            "best_on_grid": 0.2,
+            "gain": 0.001433,
+            "ci95": [
+              -0.000559,
+              0.004057
+            ],
+            "taken": false
+          }
+        ],
         "start": {
-          "smooth_split": 0.6,
-          "cohesion_split": 8.0
+          "smooth_split": 0.6
         },
-        "score_start": 0.362672,
-        "score_best": 0.449952,
+        "score_start": 0.448879,
+        "score_best": 0.448879,
+        "at_upper_edge": []
+      },
+      "stability/joint-full": {
+        "metric": "S_gen",
+        "assigner": "joint-full",
+        "search": "coordinate descent; a value is taken only if the paired 95% bootstrap interval (5000 resamples) of its per-piece gain lies above zero",
+        "rounds": 2,
+        "trials": 29,
+        "decisions": [
+          {
+            "round": 1,
+            "parameter": "smooth_full",
+            "from": 0.6,
+            "best_on_grid": 2.0,
+            "gain": 0.007819,
+            "ci95": [
+              0.000295,
+              0.015513
+            ],
+            "taken": true
+          },
+          {
+            "round": 1,
+            "parameter": "chord_span_threshold",
+            "from": 7.0,
+            "best_on_grid": 9.0,
+            "gain": 0.001559,
+            "ci95": [
+              -0.003508,
+              0.007309
+            ],
+            "taken": false
+          },
+          {
+            "round": 1,
+            "parameter": "chord_span_weight",
+            "from": 2.0,
+            "best_on_grid": 1.0,
+            "gain": 0.003364,
+            "ci95": [
+              -0.001101,
+              0.008091
+            ],
+            "taken": false
+          },
+          {
+            "round": 2,
+            "parameter": "chord_span_threshold",
+            "from": 7.0,
+            "best_on_grid": 9.0,
+            "gain": 0.001559,
+            "ci95": [
+              -0.003508,
+              0.007309
+            ],
+            "taken": false
+          },
+          {
+            "round": 2,
+            "parameter": "chord_span_weight",
+            "from": 2.0,
+            "best_on_grid": 1.0,
+            "gain": 0.003364,
+            "ci95": [
+              -0.001101,
+              0.008091
+            ],
+            "taken": false
+          }
+        ],
+        "start": {
+          "smooth_full": 0.6,
+          "chord_span_threshold": 7.0,
+          "chord_span_weight": 2.0
+        },
+        "score_start": 0.495916,
+        "score_best": 0.503734,
         "at_upper_edge": []
       },
       "stability/joint-local": {
         "metric": "S_gen",
         "assigner": "joint-local",
-        "search": "coordinate descent",
+        "search": "coordinate descent; a value is taken only if the paired 95% bootstrap interval (5000 resamples) of its per-piece gain lies above zero",
         "rounds": 1,
-        "trials": 15,
+        "trials": 17,
+        "decisions": [
+          {
+            "round": 1,
+            "parameter": "smooth_local",
+            "from": 0.6,
+            "best_on_grid": 4.0,
+            "gain": 0.018471,
+            "ci95": [
+              0.006369,
+              0.030246
+            ],
+            "taken": true
+          }
+        ],
         "start": {
           "smooth_local": 0.6
         },
-        "score_start": 0.433881,
-        "score_best": 0.470253,
-        "at_upper_edge": [
-          "smooth_local"
-        ]
+        "score_start": 0.476746,
+        "score_best": 0.495217,
+        "at_upper_edge": []
       }
     }
   }
