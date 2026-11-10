@@ -1,6 +1,6 @@
 """Evaluation harness for the fingering pipeline.
 
-Four modes; the data-driven ones write a tidy CSV/JSON table plus a printed
+Several modes; the data-driven ones write a tidy CSV/JSON table plus a printed
 summary:
 
   * ``ablation`` -- run the pipeline across the (reduce x assigner x solver) grid
@@ -23,9 +23,11 @@ summary:
     notes with a prediction, ``n_failed_hands`` the hands left unfingered), so all
     variants are scored on the same notes.  ``seconds`` is the assignment plus
     fingering time, the median of ``--repeats`` runs that each start with empty
-    caches.
+    caches.  ``--beam`` changes the joint-full beam (whole-piece beam loss), and
+    ``--pieces test-30`` keeps only the test pieces.
 
         python evaluate.py pig [path/to/PIG/FingeringFiles] [--assigner joint-full]
+            [--beam 128] [--pieces test-30]
 
   * ``agreement`` -- the human reference: on the pieces with two or more
     annotators, each annotator is scored against the others with the same rates.
@@ -42,12 +44,24 @@ summary:
         python evaluate.py compare output/pig_split.json output/pig_joint-full.json
             [--subset test-30]
 
-  * ``beamgap`` -- measure what the joint-full assigner's beam costs: on short
-    excerpts of a MIDI file, compare the best joint cost found with the default
-    beam against the exact optimum (``beam=None``, same boundary window).  The
-    exact search is exponential, so excerpts are kept short (``--length``).
+  * ``reduction`` -- the reducer on PIG (the 30 test pieces by default): each
+    piece without reduction, with the note edits only, and with the edits plus the
+    tempo reduction, each result measured with the three variants.  Reports the
+    efficacy (share of onsets within the three ceilings), the fidelity figures of
+    :func:`src.metrics.reduction_fidelity`, the tempo factor, the difficulty and the
+    total cost.
 
-        python evaluate.py beamgap [data/some.mid] [--length 16] [--stride 50]
+        python evaluate.py reduction [path/to/PIG/FingeringFiles] [--pieces all]
+
+  * ``beamgap`` -- measure what the joint-full assigner's beam costs: on short
+    excerpts, compare the best joint cost found with the default beam against
+    the exact optimum (``beam=None``, same boundary window).  The excerpts are the
+    first ``--length`` onsets of every PIG piece, or, given a MIDI file, one every
+    ``--stride`` onsets.  The exact search is exponential, so excerpts are kept
+    short; run it under ``ulimit -v`` so an excerpt that exhausts memory is
+    recorded and skipped instead of stopping the run.
+
+        python evaluate.py beamgap [PIG folder | data/some.mid] [--length 16]
 
   * ``selftest`` -- assert properties on small synthetic examples (no data or
     model needed): the definitional ordering of the match rates; that an
@@ -76,6 +90,7 @@ import argparse
 import csv
 import dataclasses
 import datetime
+import functools
 import glob
 import hashlib
 import inspect
@@ -95,7 +110,7 @@ from src.assigners import joint_full
 from src.solvers import get_solver
 from src.solvers.base import SolverResult
 from src.sheet_export import render_fingering_pdf
-from src.sheet_reducer import default_target, reduce_score
+from src.sheet_reducer import condense, default_target, reduce_score
 from src.difficulty import DEFAULT_DELTA_T, note_difficulties
 from src.hands import DEFAULT_HANDS, Hand
 from src import costs
@@ -115,9 +130,16 @@ DEFAULT_PIG_ROOT = os.path.join(HERE, "PianoFingeringDataset_v1.2",
 # Shared pipeline steps
 # --------------------------------------------------------------------------- #
 
-def assign_and_split(layers, assigner, hands):
-    """Assign hands and partition the layers into per-hand streams."""
-    labels = get_assigner(assigner)(layers, hands=hands).assign()
+def assign_and_split(layers, assigner, hands, info=None):
+    """Assign hands and partition the layers into per-hand streams.
+
+    If ``info`` is a dict, it receives ``window_opened`` from assigners that
+    report it (joint-full: onsets where the boundary window had to open).
+    """
+    a = get_assigner(assigner)(layers, hands=hands)
+    labels = a.assign()
+    if info is not None and hasattr(a, "window_opened"):
+        info["window_opened"] = a.window_opened
     hand_layers = split_layers_by_hands(layers, labels, hands)
     return labels, hand_layers
 
@@ -291,13 +313,46 @@ def hands_without(spec):
             for h in DEFAULT_HANDS]
 
 
-def _assign_and_solve(layers, gt, assigner, solver, hands):
+def _assign_and_solve(layers, gt, assigner, solver, hands, info=None):
+    """Hands, then fingering; also returns the seconds each step took."""
+    t0 = time.perf_counter()
     if assigner == "oracle":
         labels = oracle_labels(layers, gt, hands)
         hand_layers = split_layers_by_hands(layers, labels, hands)
     else:
-        labels, hand_layers = assign_and_split(layers, assigner, hands)
-    return labels, hand_layers, solve_hands(hand_layers, hands, solver)
+        labels, hand_layers = assign_and_split(layers, assigner, hands, info)
+    t1 = time.perf_counter()
+    results = solve_hands(hand_layers, hands, solver)
+    t2 = time.perf_counter()
+    return labels, hand_layers, results, (t1 - t0, t2 - t1)
+
+
+# PIG times are in seconds; read as whole notes they are a score at 240 quarter
+# notes per minute, so the 1 s difficulty window spans one whole note
+PIG_BPM = 240.0
+
+
+def difficulty_row(layers, hand_layers, results, hands, bpm, delta_t=DEFAULT_DELTA_T):
+    """Per-onset difficulty of a fingered two-hand score and its summary fields.
+
+    Returns ``(diffs, fields)``.  When a hand has no fingering (its cost is
+    infinite) the difficulty is undefined, so ``diffs`` is ``None`` and the fields
+    are empty: those pieces are counted by ``n_failed_hands`` instead.
+    """
+    if len(hands) != 2 or any(r.cost == float("inf") for r in results.values()):
+        return None, {}
+    left = next(h for h in hands if h.side == "L")
+    right = next(h for h in hands if h.side == "R")
+    diffs = note_difficulties(
+        layers, hand_layers.get(left.name, []), results[left.name].path,
+        hand_layers.get(right.name, []), results[right.name].path,
+        bpm=bpm, delta_t=delta_t)
+    fields = {}
+    for name, stats in metrics.difficulty_stats(diffs).items():
+        fields[f"{name}_p50"] = stats["p50"]
+        fields[f"{name}_p90"] = stats["p90"]
+        fields[f"{name}_max"] = stats["p100"]
+    return diffs, fields
 
 
 def evaluate_piece(paths, assigner, solver, hands=DEFAULT_HANDS, repeats=1):
@@ -310,13 +365,12 @@ def evaluate_piece(paths, assigner, solver, hands=DEFAULT_HANDS, repeats=1):
     layers, gt = pig_loader.load_piece(paths)
     if not layers:
         return None
-    times, first = [], None
+    times, first, info = [], None, {}
     for _ in range(max(1, repeats)):
         clear_caches()
-        t0 = time.perf_counter()
-        labels, hand_layers, results = _assign_and_solve(layers, gt, assigner,
-                                                         solver, hands)
-        times.append(time.perf_counter() - t0)
+        labels, hand_layers, results, step = _assign_and_solve(layers, gt, assigner,
+                                                               solver, hands, info)
+        times.append(step)
         snapshot = (labels, {n: (r.cost, r.path) for n, r in results.items()})
         if first is None:
             first = snapshot
@@ -347,7 +401,11 @@ def evaluate_piece(paths, assigner, solver, hands=DEFAULT_HANDS, repeats=1):
         pred_h, [gt[k]["hands"] for k in keys])
     mr["coverage"] = sum(f is not None for f in pred_f) / len(keys) if keys else 0.0
     mr["total_cost"] = sum(r.cost for r in results.values())
-    mr["seconds"] = statistics.median(times)
+    # median over the cold runs, of each step and of the two together
+    mr["seconds"] = statistics.median(a + b for a, b in times)
+    mr["seconds_assign"] = statistics.median(a for a, _ in times)
+    mr["seconds_fingering"] = statistics.median(b for _, b in times)
+    mr.update(difficulty_row(layers, hand_layers, results, hands, PIG_BPM)[1])
     # instants out of reach (cost >= 100) and hands with no fingering at all
     from src.costs import MAX_MOVE_COST_HARD
     from src.difficulty import layer_costs
@@ -364,19 +422,86 @@ def evaluate_piece(paths, assigner, solver, hands=DEFAULT_HANDS, repeats=1):
     mr["n_failed_hands"] = failed
     mr["n_notes"] = len(keys)
     mr["n_annotators"] = n_ann
+    if "window_opened" in info:     # joint-full: onsets where the window opened
+        mr["window_opened"] = info["window_opened"]
     return mr
 
 
-def run_pig(root, assigner, solver, hands=DEFAULT_HANDS, repeats=1):
+def run_pig(root, assigner, solver, hands=DEFAULT_HANDS, repeats=1, subset="all"):
     pieces = pig_loader.discover_pieces(root)
     if not pieces:
         raise SystemExit(f"No PIG *_fingering.txt files under {root!r}")
     rows = []
     for piece, paths in sorted(pieces.items()):
+        if subset == "test-30" and piece not in pig_loader.TEST_PIECES:
+            continue
         res = evaluate_piece(paths, assigner, solver, hands, repeats)
         if res:
             res["piece"] = piece
             rows.append(res)
+    return rows
+
+
+# --------------------------------------------------------------------------- #
+# Reduction mode: the reducer on PIG, measured with every variant
+# --------------------------------------------------------------------------- #
+
+REDUCE_CONFIGS = ("none", "notes", "notes+tempo")
+
+
+def run_reduction(root, assigners=ASSIGNERS, subset="test-30", hands=DEFAULT_HANDS):
+    """Reduce each PIG piece to the ceilings and measure the result with each variant.
+
+    Three settings per piece: no reduction (the condensed score), the two note edits
+    of Nakamura & Yoshii only, and the edits plus the global tempo reduction.  The
+    reducer itself always measures with joint-local; measuring its output with the
+    other variants shows how much that approximation lets through.  Efficacy is the
+    share of onsets with all three difficulties under the ceilings, measured at the
+    tempo the reduction left (240 times the tempo factor); it is ``None`` when a
+    hand could not be fingered, and ``n_failed_hands`` says so.
+    """
+    target = default_target()
+    rows = []
+    for piece, paths in sorted(pig_loader.discover_pieces(root).items()):
+        if subset == "test-30" and piece not in pig_loader.TEST_PIECES:
+            continue
+        layers, _gt = pig_loader.load_piece(paths)
+        if not layers:
+            continue
+        for config in REDUCE_CONFIGS:
+            t0 = time.perf_counter()
+            if config == "none":
+                red, (score, _mult), fid = None, condense(layers), {}
+            else:
+                red = reduce_score(layers, target=target, bpm=PIG_BPM, hands=hands,
+                                   allow_tempo_reduction=(config == "notes+tempo"))
+                score, fid = red.layers, metrics.reduction_fidelity(red, layers)
+            seconds = time.perf_counter() - t0
+            factor = red.tempo_factor if red else 1.0
+            for assigner in assigners:
+                _labels, hand_layers = assign_and_split(score, assigner, hands)
+                results = solve_hands(hand_layers, hands, "viterbi")
+                diffs, dfields = difficulty_row(score, hand_layers, results, hands,
+                                                PIG_BPM * factor)
+                sat = metrics.target_satisfaction(diffs, target) if diffs else {}
+                row = {
+                    "piece": piece, "reduce": config, "assigner": assigner,
+                    "efficacy": sat.get("satisfaction_rate"),
+                    "n_violations": sat.get("n_violations"),
+                    "n_onsets": len(score),
+                    "total_cost": sum(r.cost for r in results.values()),
+                    "n_failed_hands": sum(r.cost == float("inf")
+                                          for r in results.values()),
+                    "tempo_factor": factor,
+                    "seconds_reduce": round(seconds, 3),
+                }
+                row.update(dfields)
+                row.update({f"fid_{k}": v for k, v in fid.items()})
+                rows.append(row)
+                eff = "failed" if row["efficacy"] is None else f"{row['efficacy']:.3f}"
+                print(f"{piece} {config:11} {assigner:11} efficacy={eff} "
+                      f"deleted={fid.get('deletions', 0)} shifted={fid.get('shifts', 0)} "
+                      f"tempo={factor:.0%} ({seconds:.1f} s)", flush=True)
     return rows
 
 
@@ -506,6 +631,8 @@ def run_selftest():
     print("OK: difficulty scales with tempo")
     check_mrec_definition()
     check_held_reach()
+    check_snap_releases()
+    check_window_opens()
     check_fold_stays_inside()
     check_viterbi_exact()
     check_unfingerable_first_layer()
@@ -600,9 +727,11 @@ def check_held_reach():
     """A held note out of reach of the new notes is let go, at a fixed cost.
 
     Holding C3 while the same hand plays C6 costs exactly the release cost more
-    than playing C6 after C3 ends; holding C4 under E4 costs nothing; and the
-    finger that let go is free for the next onset, so a five-note chord that
-    follows is still fingerable.
+    than playing C6 after C3 ends; holding C4 under E4 costs nothing; the finger
+    that let go is free for the next onset, so a five-note chord that follows is
+    still fingerable; and a five-note chord struck while C4 is still held costs
+    exactly the release cost more than after C4 ends, the finger letting go of
+    C4 to play the chord.
     """
     from src import params
     release = params.get("release")
@@ -619,7 +748,52 @@ def check_held_reach():
         tail = [{"time": 0.0, "notes": [(48, 3.0)]},
                 {"time": 1.0, "notes": [(84, 1.2)]}, chord]
         assert run(tail, name) < float("inf"), name
-    print("OK: a held note out of reach is let go at a fixed cost and frees its finger")
+        under = [{"time": 0.0, "notes": [(60, 3.0)]}, dict(chord, time=1.0)]
+        after = [{"time": 0.0, "notes": [(60, 1.0)]}, dict(chord, time=1.0)]
+        assert abs(run(under, name) - run(after, name) - release) < 1e-9, name
+    print("OK: a held note out of reach is let go at a fixed cost and frees its "
+          "finger, at once if a new note needs it")
+
+
+def check_snap_releases():
+    """PIG reading: an end within 30 ms after a later onset is read as at it.
+
+    A note that sounds 12 ms into the next one is the MIDI file's legato and
+    ends at that onset; one held 100 ms into it is held on purpose and keeps its
+    end; an end before the next onset is untouched.
+    """
+    layers = [{"time": 0.0, "notes": [(60, 0.512), (64, 0.6), (67, 0.4)]},
+              {"time": 0.5, "notes": [(62, 1.0)]}]
+    pig_loader._snap_releases(layers)
+    assert layers[0]["notes"] == [(60, 0.5), (64, 0.6), (67, 0.4)], layers
+    print("OK: PIG releases within 30 ms after a later onset are read as at it")
+
+
+def check_window_opens():
+    """Joint-full opens the boundary window when no split within it is playable.
+
+    A ten-note chord whose only playable split is between E3 and G3 is followed
+    by a seven-note chord that both hands can take only with the boundary above
+    B4, more than the window's six semitones away.  The window must open there,
+    and no hand may get more notes than it has fingers (the old fallback kept
+    the previous boundary and gave all seven notes to the right hand).
+    """
+    from src.assigners.joint_full import JointFullAssigner
+    low, high = [38, 41, 45, 48, 52], [55, 57, 59, 60, 62]
+    chord = [67, 71, 74, 77, 79, 83, 86]
+    layers = [{"time": 0.0, "notes": [(p, 1.0) for p in low + high]},
+              {"time": 1.0, "notes": [(p, 2.0) for p in chord]}]
+    a = JointFullAssigner(layers)
+    labels = a.assign()
+    assert a.window_opened == 1, a.window_opened
+    assert a.total_cost < float("inf"), a.total_cost
+    for li, layer in enumerate(layers):
+        per = {}
+        for ni in range(len(layer["notes"])):
+            per[labels[(li, ni)]] = per.get(labels[(li, ni)], 0) + 1
+        assert max(per.values()) <= 5, (li, per)
+    print("OK: joint-full opens the boundary window when no split within it is "
+          "playable")
 
 
 def check_fold_stays_inside():
@@ -652,12 +826,12 @@ def check_viterbi_exact(n_inputs=300, seed=0):
             t += rng.choice((0.5, 1))
         cv = viterbi(layers, hand="R").solve().cost
         ce = exhaustive(layers, hand="R").solve().cost
-        # both inf (held notes leave too few fingers) counts as agreement
+        # both inf would also count as agreement
         assert cv == ce or abs(cv - ce) < 1e-9, \
             f"input {k}: viterbi {cv} != exhaustive {ce}"
         feasible += cv != float("inf")
     print(f"OK: Viterbi matches exhaustive search on {n_inputs} random inputs "
-          f"({feasible} fingerable, the rest unfingerable for both)")
+          f"({feasible} fingerable)")
 
 
 def check_unfingerable_first_layer():
@@ -805,31 +979,51 @@ def check_reduce_missing_finger(midi_path="data/mond_1.mid", n_layers=60):
 # Beam gap of the joint-full assigner
 # --------------------------------------------------------------------------- #
 
-def run_beamgap(midi_path, length, stride, hands=DEFAULT_HANDS):
-    """Beamed vs exact joint-full cost on ``length``-onset excerpts every ``stride``."""
-    layers, _tempo = read_midi(midi_path)
+def run_beamgap(source, length, stride, hands=DEFAULT_HANDS):
+    """Beamed vs exact joint-full cost on ``length``-onset excerpts.
+
+    ``source`` is either the PIG folder, where the excerpt is the first ``length``
+    onsets of every piece, or a MIDI file, cut every ``stride`` onsets.
+    """
+    if os.path.isdir(source):
+        excerpts = [(piece, 0, pig_loader.load_piece(paths)[0][:length])
+                    for piece, paths in sorted(pig_loader.discover_pieces(source).items())]
+    else:
+        layers, _tempo = read_midi(source)
+        excerpts = [(os.path.basename(source), start, layers[start:start + length])
+                    for start in range(0, max(1, len(layers) - length + 1), stride)]
     Assigner = get_assigner("joint-full")
     rows = []
-    for start in range(0, max(1, len(layers) - length + 1), stride):
-        excerpt = layers[start:start + length]
+    for piece, start, excerpt in excerpts:
         timings = {}
         costs = {}
         for name, beam in (("beam", 32), ("exact", None)):
             a = Assigner(excerpt, hands=hands, beam=beam)
             t0 = time.perf_counter()
-            a.assign()
+            try:
+                a.assign()
+                costs[name] = a.total_cost
+            except MemoryError:          # run under ``ulimit -v`` so this is caught
+                costs[name] = None
             timings[name] = time.perf_counter() - t0
-            costs[name] = a.total_cost
+            del a
+        if costs["exact"] is None:
+            rows.append({"piece": piece, "start": start, "length": len(excerpt),
+                         "cost_beam": costs["beam"], "cost_exact": None, "gap": None,
+                         "rel_gap": None, "seconds_beam": round(timings["beam"], 3),
+                         "seconds_exact": None})
+            print(f"{piece} start={start:>4} exact search ran out of memory", flush=True)
+            continue
         gap = costs["beam"] - costs["exact"]
         rows.append({
-            "start": start, "length": len(excerpt),
+            "piece": piece, "start": start, "length": len(excerpt),
             "cost_beam": costs["beam"], "cost_exact": costs["exact"],
             "gap": gap,
             "rel_gap": gap / costs["exact"] if costs["exact"] else 0.0,
             "seconds_beam": round(timings["beam"], 3),
             "seconds_exact": round(timings["exact"], 3),
         })
-        print(f"start={start:>4} beam={costs['beam']:>8.2f} "
+        print(f"{piece} start={start:>4} beam={costs['beam']:>8.2f} "
               f"exact={costs['exact']:>8.2f} gap={gap:>6.2f} "
               f"({timings['beam']:.2f}s vs {timings['exact']:.2f}s)", flush=True)
     return rows
@@ -965,6 +1159,30 @@ def code_fingerprint():
     return h.hexdigest()
 
 
+def _cpu_conditions():
+    """What the timings depend on besides the code: the CPUs the process may run on
+    (``taskset``), their frequency limits, the governor and whether turbo is off.
+    Linux only; anything unreadable is left out."""
+    out = {}
+    try:
+        cpus = sorted(os.sched_getaffinity(0))
+        out["affinity"] = cpus
+    except (AttributeError, OSError):
+        cpus = []
+    def read(path):
+        try:
+            with open(path) as fh:
+                return fh.read().strip()
+        except OSError:
+            return None
+    for c in cpus:
+        base = f"/sys/devices/system/cpu/cpu{c}/cpufreq/"
+        out[f"cpu{c}"] = {k: read(base + k) for k in
+                          ("scaling_governor", "scaling_max_freq", "cpuinfo_max_freq")}
+    out["no_turbo"] = read("/sys/devices/system/cpu/intel_pstate/no_turbo")
+    return out
+
+
 def _cpu_model():
     try:
         with open("/proc/cpuinfo") as fh:
@@ -988,9 +1206,9 @@ def provenance(args, hands=DEFAULT_HANDS):
                    .parameters.items() if v.default is not inspect.Parameter.empty
                    and k != "hands"}
     pairs = lambda d: {f"{a}-{b}": v for (a, b), v in sorted(d.items())}
-    params = {k: v for k, v in vars(args).items()
-              if k not in ("out", "root", "midi", "a", "b")}
-    params.update({
+    settings = {k: v for k, v in vars(args).items()
+                if k not in ("out", "root", "midi", "a", "b")}
+    settings.update({
         "hands": [dataclasses.asdict(h) for h in hands],
         "max_comfort": pairs(costs.MAX_COMFORT),
         "max_abs": pairs(costs.MAX_ABS),
@@ -1012,7 +1230,8 @@ def provenance(args, hands=DEFAULT_HANDS):
         "python": sys.version.split()[0],
         "platform": platform.platform(),
         "cpu": _cpu_model(),
-        "params": params,
+        "cpu_conditions": _cpu_conditions(),
+        "params": settings,
     }
 
 
@@ -1075,14 +1294,24 @@ def main():
                         'coupled assigner)')
     p.add_argument("--repeats", type=int, default=1,
                    help="cold runs per piece; 'seconds' is their median")
+    p.add_argument("--beam", type=int, default=None,
+                   help="beam of the joint-full assigner (default: its own, 32)")
+    p.add_argument("--pieces", default="all", choices=("all", "test-30"))
     p.add_argument("--out", default="output/eval_pig")
 
     g = sub.add_parser("agreement")
     g.add_argument("root", nargs="?", default=DEFAULT_PIG_ROOT)
     g.add_argument("--out", default="output/eval_agreement")
 
+    r = sub.add_parser("reduction")
+    r.add_argument("root", nargs="?", default=DEFAULT_PIG_ROOT)
+    r.add_argument("--pieces", default="test-30", choices=("test-30", "all"))
+    r.add_argument("--out", default="output/eval_reduction")
+
     b = sub.add_parser("beamgap")
-    b.add_argument("midi", nargs="?", default="data/mond_1.mid")
+    b.add_argument("midi", nargs="?", default=DEFAULT_PIG_ROOT,
+                   help="the PIG folder (first --length onsets of every piece) or a "
+                        "MIDI file (an excerpt every --stride onsets)")
     b.add_argument("--length", type=int, default=16,
                    help="onsets per excerpt (the exact search is exponential)")
     b.add_argument("--stride", type=int, default=50,
@@ -1112,6 +1341,10 @@ def main():
         set_span_limits(args.limits)
         clear_caches()
         hands = hands_without(args.remove_finger)
+        if args.beam is not None:       # recorded in the provenance as "beam"
+            from src import assigners
+            assigners.ASSIGNERS["joint-full"] = functools.partial(
+                joint_full.JointFullAssigner, beam=args.beam)
     # taken before the run, so a file edited while it runs is not credited to it
     meta = provenance(args, hands)
 
@@ -1126,15 +1359,33 @@ def main():
         write_table(rows, args.out, meta)
         return
 
+    if args.mode == "reduction":
+        rows = run_reduction(args.root, subset=args.pieces)
+        for config in REDUCE_CONFIGS:
+            for assigner in ASSIGNERS:
+                sel = [r for r in rows if r["reduce"] == config and r["assigner"] == assigner]
+                ok = [r["efficacy"] for r in sel if r["efficacy"] is not None]
+                if sel:
+                    print(f"{config:11} {assigner:11} efficacy {sum(ok) / len(ok):.3f} "
+                          f"over {len(ok)} pieces, {len(sel) - len(ok)} with a hand unfingered")
+        write_table(rows, args.out, meta)
+        return
+
     if args.mode == "beamgap":
         rows = run_beamgap(args.midi, args.length, args.stride)
-        if rows:
+        done = [r for r in rows if r["gap"] is not None]
+        if len(done) < len(rows):
+            print(f"{len(rows) - len(done)} excerpts left out: the exact search ran "
+                  f"out of memory")
+        if done:
+            rows_all, rows = rows, done
             n = len(rows)
             hit = sum(1 for r in rows if r["gap"] <= 1e-9)
             print("-" * 60)
             print(f"{hit}/{n} excerpts at the exact optimum; "
                   f"max gap {max(r['gap'] for r in rows):.2f}, "
                   f"mean relative gap {sum(r['rel_gap'] for r in rows) / n:.2%}")
+            rows = rows_all
         write_table(rows, args.out, meta)
         return
 
@@ -1150,7 +1401,8 @@ def main():
         return
 
     if args.mode == "pig":
-        rows = run_pig(args.root, args.assigner, args.solver, hands, args.repeats)
+        rows = run_pig(args.root, args.assigner, args.solver, hands, args.repeats,
+                       args.pieces)
         if rows:
             for r in rows:
                 flag = (f"  FAILED {r['n_failed_hands']} hand(s), coverage "

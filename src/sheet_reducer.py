@@ -248,8 +248,8 @@ def _measure(layers, delta_t, assigner, bpm, hands=DEFAULT_HANDS):
     diffs = note_difficulties(layers, lh_layers, lh.path, rh_layers, rh.path,
                               bpm=bpm, delta_t=delta_t)
 
-    # A hand whose Viterbi search failed (a chord needs more free fingers than
-    # the hand has) yields an empty path and a spurious zero difficulty there;
+    # A hand whose Viterbi search failed (a chord with more notes than the hand
+    # has fingers) yields an empty path and a spurious zero difficulty there;
     # force that onset over target so the loop edits it.
     for res, hand in ((lh, "L"), (rh, "R")):
         if res.cost == float("inf"):
@@ -485,8 +485,8 @@ def _tempo_would_help(diff):
     """Is this onset's difficulty a *density* the tempo can thin out?
 
     True when both hands' difficulties are finite.  An infinite ``D_L``/``D_R``
-    comes from a Viterbi failure (a chord needing more free fingers than the hand
-    has, see :func:`_measure`): no tempo makes it playable, so it must not drive
+    comes from a Viterbi failure (a chord with more notes than the hand has
+    fingers, see :func:`_measure`): no tempo makes it playable, so it must not drive
     the tempo down.
     """
     return all(d != float("inf") for d in diff)

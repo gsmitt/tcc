@@ -9,17 +9,17 @@
     "comfort_1_5": 13.0,
     "smooth_split": 0.6,
     "smooth_local": 4.0,
-    "smooth_full": 2.0
+    "smooth_full": 3.0
   },
   "ceiling": [
-    47.0,
-    36.0,
-    75.6
+    46.0,
+    39.0,
+    76.0
   ],
   "meta": {
-    "updated": "2026-11-08T22:32:19",
-    "git_commit": "9bc3ac68fdd77e9eb38b105041094a4a3cfa4a64",
-    "code_fingerprint": "113f9706ca46f41252f7927636caacc86c3f13637113ded66237fa9f0a0a4bb5",
+    "updated": "2026-11-09T18:43:01",
+    "git_commit": "4d9c584e7efb167835c85d7e1beab23229c28483",
+    "code_fingerprint": "9ba8fdb0ed7ff6b7f730ea6b14110b3c61693dfca0229682fc887cb166da6740",
     "training_pieces": "PIG 031-150 (120 pieces)",
     "excluded_pieces": "PIG 001-030, the test set of Nakamura, Saito & Yoshii (2020)",
     "stages": {
@@ -32,25 +32,13 @@
         "decisions": [
           {
             "round": 1,
-            "parameter": "release",
-            "from": 10.0,
-            "best_on_grid": 30.0,
-            "gain": 0.000962,
-            "ci95": [
-              -0.000983,
-              0.003173
-            ],
-            "taken": false
-          },
-          {
-            "round": 1,
             "parameter": "unison",
             "from": 1.0,
             "best_on_grid": 3.0,
-            "gain": 0.003494,
+            "gain": 0.004017,
             "ci95": [
-              -0.000504,
-              0.007506
+              -0.000118,
+              0.00827
             ],
             "taken": false
           },
@@ -59,34 +47,22 @@
             "parameter": "comfort_1_5",
             "from": 12.0,
             "best_on_grid": 13.0,
-            "gain": 0.001028,
+            "gain": 0.000939,
             "ci95": [
-              0.000368,
-              0.001917
+              0.000144,
+              0.001949
             ],
             "taken": true
-          },
-          {
-            "round": 2,
-            "parameter": "release",
-            "from": 10.0,
-            "best_on_grid": 30.0,
-            "gain": 0.001135,
-            "ci95": [
-              -0.001271,
-              0.003781
-            ],
-            "taken": false
           },
           {
             "round": 2,
             "parameter": "unison",
             "from": 1.0,
             "best_on_grid": 3.0,
-            "gain": 0.003477,
+            "gain": 0.004018,
             "ci95": [
-              -0.000512,
-              0.007482
+              -0.000114,
+              0.008261
             ],
             "taken": false
           }
@@ -98,17 +74,9 @@
           "unison": 1.0,
           "comfort_1_5": 12.0
         },
-        "score_start": 0.624843,
-        "score_best": 0.625871,
+        "score_start": 0.635498,
+        "score_best": 0.636437,
         "at_upper_edge": []
-      },
-      "ceiling": {
-        "what": "p90 of per-onset D_L, D_R, D_B pooled over the training pieces, notes only, joint-local, bpm 240, window 1 s",
-        "value": [
-          47.0,
-          36.0,
-          75.6
-        ]
       },
       "stability/split": {
         "metric": "S_gen",
@@ -122,10 +90,10 @@
             "parameter": "smooth_split",
             "from": 0.6,
             "best_on_grid": 0.2,
-            "gain": 0.001433,
+            "gain": 0.001404,
             "ci95": [
-              -0.000559,
-              0.004057
+              -0.00039,
+              0.003734
             ],
             "taken": false
           }
@@ -133,8 +101,8 @@
         "start": {
           "smooth_split": 0.6
         },
-        "score_start": 0.448879,
-        "score_best": 0.448879,
+        "score_start": 0.465616,
+        "score_best": 0.465616,
         "at_upper_edge": []
       },
       "stability/joint-full": {
@@ -148,11 +116,11 @@
             "round": 1,
             "parameter": "smooth_full",
             "from": 0.6,
-            "best_on_grid": 2.0,
-            "gain": 0.007819,
+            "best_on_grid": 3.0,
+            "gain": 0.010773,
             "ci95": [
-              0.000295,
-              0.015513
+              0.001412,
+              0.020274
             ],
             "taken": true
           },
@@ -160,11 +128,11 @@
             "round": 1,
             "parameter": "chord_span_threshold",
             "from": 7.0,
-            "best_on_grid": 9.0,
-            "gain": 0.001559,
+            "best_on_grid": 8.0,
+            "gain": 0.001576,
             "ci95": [
-              -0.003508,
-              0.007309
+              -0.00136,
+              0.004558
             ],
             "taken": false
           },
@@ -173,10 +141,10 @@
             "parameter": "chord_span_weight",
             "from": 2.0,
             "best_on_grid": 1.0,
-            "gain": 0.003364,
+            "gain": 0.000877,
             "ci95": [
-              -0.001101,
-              0.008091
+              -0.003149,
+              0.004937
             ],
             "taken": false
           },
@@ -184,11 +152,11 @@
             "round": 2,
             "parameter": "chord_span_threshold",
             "from": 7.0,
-            "best_on_grid": 9.0,
-            "gain": 0.001559,
+            "best_on_grid": 8.0,
+            "gain": 0.001576,
             "ci95": [
-              -0.003508,
-              0.007309
+              -0.00136,
+              0.004558
             ],
             "taken": false
           },
@@ -197,10 +165,10 @@
             "parameter": "chord_span_weight",
             "from": 2.0,
             "best_on_grid": 1.0,
-            "gain": 0.003364,
+            "gain": 0.000877,
             "ci95": [
-              -0.001101,
-              0.008091
+              -0.003149,
+              0.004937
             ],
             "taken": false
           }
@@ -210,8 +178,8 @@
           "chord_span_threshold": 7.0,
           "chord_span_weight": 2.0
         },
-        "score_start": 0.495916,
-        "score_best": 0.503734,
+        "score_start": 0.505241,
+        "score_best": 0.516014,
         "at_upper_edge": []
       },
       "stability/joint-local": {
@@ -226,10 +194,10 @@
             "parameter": "smooth_local",
             "from": 0.6,
             "best_on_grid": 4.0,
-            "gain": 0.018471,
+            "gain": 0.015381,
             "ci95": [
-              0.006369,
-              0.030246
+              0.004316,
+              0.025767
             ],
             "taken": true
           }
@@ -237,9 +205,17 @@
         "start": {
           "smooth_local": 0.6
         },
-        "score_start": 0.476746,
-        "score_best": 0.495217,
+        "score_start": 0.483163,
+        "score_best": 0.498544,
         "at_upper_edge": []
+      },
+      "ceiling": {
+        "what": "p90 of per-onset D_L, D_R, D_B pooled over the training pieces, notes only, joint-local, bpm 240, window 1 s",
+        "value": [
+          46.0,
+          39.0,
+          76.0
+        ]
       }
     }
   }

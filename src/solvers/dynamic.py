@@ -49,7 +49,9 @@ class DynamicSolver(FingeringSolver):
             return
         self.memo[key] = total_cost
 
-        available_fingers = [x for x in self.fingers if hand_state.is_available(x, time)]
+        # every finger is a candidate: one still holding a note lets go of it
+        # to play a new one, at the release cost (held_reach_cost)
+        available_fingers = list(self.fingers)
         still_held = [(st["note"], f) for f, st in hand_state.fingers.items()
                       if st["release_time"] > time]
 

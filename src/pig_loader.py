@@ -31,10 +31,13 @@ difficulty ceilings in :mod:`src.sheet_reducer` were measured.
 
 import os
 import glob
+from bisect import bisect_left
 
 # Grouping tolerance: notes whose onsets fall within this many seconds of the
 # layer's onset are treated as one simultaneous chord (performance timing is not
-# exactly simultaneous).
+# exactly simultaneous).  The same tolerance applies to note ends: a note that
+# ends at most this long after a later onset is read as ending at that onset
+# (:func:`_snap_releases`).
 GROUP_EPS = 0.03
 
 # The test set of Nakamura, Saito & Yoshii (2020): pieces 001-030, each fingered
@@ -150,7 +153,31 @@ def load_piece(paths):
             hands.append(r["hand"] if r else None)
         ground_truth[(layer_idx, midi)] = {"fingers": fingers, "hands": hands}
     flush()
+    _snap_releases(layers)
     return layers, ground_truth
+
+
+def _snap_releases(layers, eps=GROUP_EPS):
+    """Read a release just after a later onset as happening at that onset.
+
+    PIG's MIDI files play legato by letting a note sound a few milliseconds into
+    the next one (most such overlaps are 10-14 ms).  Read literally, the finger
+    would still be holding the old key when the next note starts, so a hand
+    playing chord after chord would seem to hold both.  An end at most ``eps``
+    after a later onset is moved back to that onset: the tolerance that makes
+    onsets within ``eps`` one chord makes an end within ``eps`` of an onset
+    simultaneous with it.  Longer overlaps are notes held on purpose and are
+    kept.  Changes ``layers`` in place.
+    """
+    times = [layer["time"] for layer in layers]
+    for i, layer in enumerate(layers):
+        snapped = []
+        for pitch, end in layer["notes"]:
+            j = bisect_left(times, end) - 1          # last onset before the end
+            if j > i and end - times[j] <= eps + 1e-9:
+                end = times[j]
+            snapped.append((pitch, end))
+        layer["notes"] = snapped
 
 
 def discover_pieces(root):

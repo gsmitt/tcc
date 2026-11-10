@@ -175,8 +175,13 @@ def reduction_fidelity(reduce_result, original_layers, a=0.01):
 def target_satisfaction(diffs, target):
     """Fraction of onsets whose difficulty is within the reduction budget.
 
-    An onset satisfies the budget when ``D_L < D̃_L ∧ D_R < D̃_R ∧ D_B < D̃_B``
-    (Nakamura & Yoshii eq. (14)).  ``diffs`` is a per-onset ``(D_L, D_R, D_B)``
+    An onset satisfies the budget when none of its three difficulties is above its
+    ceiling, ``D_L <= D̃_L ∧ D_R <= D̃_R ∧ D_B <= D̃_B`` (Nakamura & Yoshii eq. (14),
+    with ``<`` there).  The equality matters here: the costs are integers and the
+    window is 1 s, so many onsets sit exactly on a ceiling (a 90th percentile of the
+    same values), and the reducer (:func:`src.sheet_reducer._overage`) only edits an
+    onset strictly above one.  Counting the tie as a violation would report as
+    failed an onset the reducer, by its own rule, had no reason to touch.  ``diffs`` is a per-onset ``(D_L, D_R, D_B)``
     list, ``target`` the ``(D̃_L, D̃_R, D̃_B)`` ceiling.  Reports the satisfaction
     rate and ``n_violations``; the efficacy side of the fidelity/difficulty
     trade-off (pair it with :func:`reduction_fidelity`).
@@ -185,7 +190,7 @@ def target_satisfaction(diffs, target):
     if not diffs:
         return {"satisfaction_rate": 1.0, "n_violations": 0, "n_onsets": 0}
     violations = sum(1 for dl, dr, db in diffs
-                     if not (dl < tl and dr < tr and db < tb))
+                     if not (dl <= tl and dr <= tr and db <= tb))
     n = len(diffs)
     return {
         "satisfaction_rate": (n - violations) / n,

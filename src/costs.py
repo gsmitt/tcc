@@ -346,20 +346,28 @@ def held_reach_cost(held, notes, fingers, hand="R"):
 
     ``held`` is a list of ``(pitch, finger)`` for the fingers still pressing a key
     from an earlier layer at this onset; ``notes``/``fingers`` are the new layer's
-    notes and the fingers chosen for them.  For each held note the hand takes the
-    cheaper of two options: keep it, paying the stretch between it and every new
-    note under the chord pair limits (`_stretch_cost`), or release it early,
-    paying ``P["release"]``.  A held note beyond the absolute limit of a pair
-    is therefore always released, never treated as impossible: in a score a long
+    notes and the fingers chosen for them.  A held note whose finger plays one of
+    the new notes is let go at this onset, paying ``P["release"]``: the pianist
+    lifts the finger to strike the new key, so a finger is never blocked by the
+    note it holds.  For every other held note the hand takes the cheaper of two
+    options: keep it, paying the stretch between it and every new note under the
+    chord pair limits (`_stretch_cost`), or release it early, paying
+    ``P["release"]``.  A held note beyond the absolute limit of a pair is
+    therefore always released, never treated as impossible: in a score a long
     bass note under a moving hand is normal, and the pianist lets go of the key.
 
-    Returns ``(cost, released)`` with ``released`` the fingers that let go; the
-    solvers free them from the next onset on.  ``hand`` is accepted for symmetry
-    with the other cost functions; spans are distances, the same for both hands.
+    Returns ``(cost, released)`` with ``released`` the fingers that let go and
+    play nothing new (the solvers free them); a finger that let go to play a new
+    note is not listed, since it now holds that note.  ``hand`` is accepted for
+    symmetry with the other cost functions; spans are distances, the same for
+    both hands.
     """
     total = 0
     released = []
     for held_pitch, held_finger in held:
+        if held_finger in fingers:      # lifted to strike a new key
+            total += P["release"]
+            continue
         keep = 0
         for (pitch, _end), finger in zip(notes, fingers):
             stretch = _stretch_cost(held_finger, finger, abs(pitch - held_pitch))

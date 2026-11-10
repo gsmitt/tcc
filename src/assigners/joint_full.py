@@ -34,7 +34,11 @@ seeded at the midpoint of its two adjacent hands' registers.
 
 Tractability.  A ``beam`` keeps only the K cheapest states per onset, and a
 ``boundary_window`` restricts each ``b_j`` to within W semitones of its previous
-value (its seed at the first onset).  Back-pointers are kept only for the states
+value (every boundary is tried at the first onset).  When no boundary within the
+window lets every band be fingered (a wide chord that the boundary would have to
+move further than W to split, as in PIG piece 113), the window opens at that
+onset and every boundary is tried; ``window_opened`` counts these onsets.
+Back-pointers are kept only for the states
 that survive the beam: a pruned state can never lie on the returned path, and
 storing every generated state made memory grow with the number of candidates
 (over 3 GB on a four-hand chordal excerpt).  The search is linear in the number
@@ -75,12 +79,6 @@ def _chord_cost(notes, fingers, hand):
     return chord_complexity(list(notes), fingers, hand)
 
 
-def _available(held, time, fingers):
-    # mirrors HandState.is_available: a finger is free once its note is released.
-    # Only this hand's fingers are candidates (missing fingers never offered).
-    return [f for f in fingers if held[f - 1][0] <= time]
-
-
 def _assign(held, fingers, notes, query_time):
     # mirrors the Viterbi solver: untouched fingers keep their hold; any finger
     # released by query_time (the next onset) is free thereafter, so clamp to 0
@@ -106,6 +104,7 @@ class JointFullAssigner(HandAssigner):
 
     def assign(self) -> dict:
         onsets = onsets_with_release(self.layers)
+        self.window_opened = 0           # onsets where the window had to open
         if not onsets:
             return {}
 
@@ -180,13 +179,14 @@ class JointFullAssigner(HandAssigner):
             transition omitted at the first onset, where ``prev_fingers`` is None).
             Branches whose transition exceeds the hard limit are pruned.
             """
-            available = _available(held, time, fingers)
+            # every finger is a candidate: one still holding a note lets go of
+            # it to play a new one, at the release cost (held_reach_cost)
             still_held = [(p, f) for f, (r, p) in enumerate(held, start=1) if r > time]
             n = len(notes)
-            if n > len(available):
-                return                              # hand cannot hold this onset
+            if n > len(fingers):
+                return                              # more notes than fingers
             notes_t = tuple(notes)
-            for fg in combinations(available, n):
+            for fg in combinations(fingers, n):
                 if prev_fingers is None:
                     move = 0.0
                 else:
@@ -221,6 +221,29 @@ class JointFullAssigner(HandAssigner):
                 cost = sum(c[1] for c in combo)
                 yield subs, cost
 
+        def advance(dp, t, prev_notes, prev_cut, windowed):
+            """One onset of the trellis: every successor of every kept state.
+
+            ``windowed`` limits each boundary to W semitones of its previous
+            position; otherwise every boundary is tried.  Returns ``(next_dp,
+            back)``, ``back`` mapping each new state to its predecessor.
+            """
+            next_dp = {}
+            back = {}                        # state -> predecessor, this onset only
+            for (pb_tuple, psubs), pcost in dp.items():
+                prev_bands = bands_of(prev_notes, prev_cut, pb_tuple)
+                for b_tuple in b_tuples(pb_tuple if windowed else None):
+                    bands = bands_of(note_lists[t], cuts[t], b_tuple)
+                    smooth = sw * sum(abs(boundaries[c] - boundaries[pc])
+                                      for c, pc in zip(b_tuple, pb_tuple))
+                    for subs, cost in expand(b_tuple, bands, prev_bands, psubs):
+                        state = (b_tuple, subs)
+                        total = pcost + smooth + cost
+                        if total < next_dp.get(state, math.inf):
+                            next_dp[state] = total
+                            back[state] = (pb_tuple, psubs)
+            return next_dp, back
+
         # dp: state -> best cost; parent: (onset_idx, state) -> previous state.
         # state = (b_tuple, hand_subs); hand_subs = ((fingers, held), ... x H).
         time = times[0]
@@ -245,23 +268,18 @@ class JointFullAssigner(HandAssigner):
             next_time = times[t + 1] if t + 1 < len(onsets) else math.inf
             prev_notes = note_lists[t - 1]
             prev_cut = cuts[t - 1]
-            next_dp = {}
-            back = {}                        # state -> predecessor, this onset only
-            for (pb_tuple, psubs), pcost in dp.items():
-                prev_bands = bands_of(prev_notes, prev_cut, pb_tuple)
-                for b_tuple in b_tuples(pb_tuple):
-                    bands = bands_of(note_lists[t], cuts[t], b_tuple)
-                    smooth = sw * sum(abs(boundaries[c] - boundaries[pc])
-                                      for c, pc in zip(b_tuple, pb_tuple))
-                    for subs, cost in expand(b_tuple, bands, prev_bands, psubs):
-                        state = (b_tuple, subs)
-                        total = pcost + smooth + cost
-                        if total < next_dp.get(state, math.inf):
-                            next_dp[state] = total
-                            back[state] = (pb_tuple, psubs)
+            next_dp, back = advance(dp, t, prev_notes, prev_cut, windowed=True)
             if not next_dp:
-                # No playable continuation at all (every split needs more fingers
-                # than free). Fall back to the boundaries chosen so far.
+                # No split within the window lets every hand finger this onset
+                # (the boundary would have to move further than W): open the
+                # window to every boundary, as at the first onset.
+                next_dp, back = advance(dp, t, prev_notes, prev_cut, windowed=False)
+                self.window_opened += 1
+            if not next_dp:
+                # No playable continuation even with the window open: every
+                # split puts more notes in some hand than it has fingers (or
+                # every move is beyond the hard limit). Fall back to the
+                # boundaries chosen so far.
                 self.total_cost = math.inf
                 return self._labels(onsets, boundaries,
                                     self._backtrack(dp, parent, t - 1), tail_from=t)

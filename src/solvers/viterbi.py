@@ -9,10 +9,11 @@ the DFS solvers suffer from on large inputs (500+ layers).
 A DP state at a layer is `(fingers, held)`:
   - `fingers`  - the fingering tuple assigned to this layer's notes.
   - `held`     - a 5-tuple of `(release_time, pitch)` per finger 1..5, i.e. a
-                 hashable snapshot of `HandState`. This carries sustained-note
-                 availability exactly, so the result matches the brute-force
-                 optimum; the pitch lets `held_reach_cost` check that a note
-                 still held is within reach of the notes the hand starts.
+                 hashable snapshot of `HandState`. This carries the sustained
+                 notes exactly, so the result matches the brute-force optimum;
+                 the pitch lets `held_reach_cost` check that a note still held
+                 is within reach of the notes the hand starts, and a finger
+                 still holding a note may let go of it to play a new one.
 
 `held` is canonicalized against the time at which it will next be queried (the
 next layer's onset): any finger already released by then is free for every later
@@ -42,11 +43,10 @@ class ViterbiSolver(FingeringSolver):
         self.node_visits = 0
         self.peak_states = 0
 
-    def _available(self, held, time):
-        # mirrors HandState.is_available: finger free once its note is released.
-        # Only this hand's available fingers are candidates (missing fingers are
-        # never offered); the held tuple stays width-5, unused slots stay 0.
-        return [f for f in self.fingers if held[f - 1][0] <= time]
+    # Every finger of the hand is a candidate at every layer: a finger still
+    # holding a note may let go of it to play a new one, at the release cost
+    # (`held_reach_cost`).  Missing fingers are never offered; the held tuple
+    # stays width-5, unused slots stay 0.
 
     def _assign(self, held, fingers, notes, query_time):
         # mirrors HandState.copy() + assign: untouched fingers keep their hold.
@@ -72,8 +72,7 @@ class ViterbiSolver(FingeringSolver):
 
         first = self.layers[0]
         next_time = self.layers[1]["time"] if len(self.layers) > 1 else math.inf
-        for fingers in combinations(self._available(FREE, first["time"]),
-                                    len(first["notes"])):
+        for fingers in combinations(self.fingers, len(first["notes"])):
             self.node_visits += 1
             cost = chord_complexity(first["notes"], fingers, self.hand)
             state = (fingers, self._assign(FREE, fingers, first["notes"], next_time))
@@ -99,9 +98,8 @@ class ViterbiSolver(FingeringSolver):
 
             next_dp = {}
             for (prev_fingers, held), prev_cost in dp.items():
-                available = self._available(held, time)
                 still_held = self._held_notes(held, time)
-                for fingers in combinations(available, n):
+                for fingers in combinations(self.fingers, n):
                     self.node_visits += 1
                     move_cost = fingering_transition_cost(
                         prev_notes, notes, prev_fingers, fingers, self.hand
@@ -125,7 +123,8 @@ class ViterbiSolver(FingeringSolver):
             dp = next_dp
             self.peak_states = max(self.peak_states, len(dp))
             if not dp:
-                # no playable continuation (e.g. chord needs more fingers than free)
+                # no playable continuation (a chord with more notes than the hand
+                # has fingers, or every move beyond the hard limit)
                 return SolverResult(
                     cost=math.inf, path=[], node_visits=self.node_visits,
                     extras={"peak_states": self.peak_states, "failed_at": idx},

@@ -6,8 +6,8 @@ atribuição conjunta de mãos e dedos com controle de dificuldade*, de Gustavo 
 
 A partir de um arquivo MIDI, o sistema decide qual mão e qual dedo tocam cada nota e grava uma
 partitura com o dedilhado indicado. As duas decisões são tomadas juntas e julgadas pela mesma
-função de custo ergonômico, montada a partir de trabalhos publicados, sem dados de treinamento.
-Se for pedido, o sistema também reduz a dificuldade da peça antes de dedilhá-la. O mesmo método
+função de custo ergonômico, montada a partir de trabalhos publicados; só os poucos valores que
+essas fontes não dão foram ajustados a dedilhados anotados por pianistas. Se for pedido, o sistema também reduz a dificuldade da peça antes de dedilhá-la. O mesmo método
 aceita mãos com dedos ausentes e mais de duas mãos no mesmo teclado, como num dueto a quatro
 mãos.
 
@@ -15,6 +15,7 @@ mãos.
 
 - [Como funciona](#como-funciona)
 - [Requisitos e instalação](#requisitos-e-instalação)
+- [O conjunto de dados PIG](#o-conjunto-de-dados-pig)
 - [Dedilhar uma peça](#dedilhar-uma-peça-mainpy)
 - [Medir a dificuldade](#medir-a-dificuldade-difficulty_profilepy)
 - [Avaliação e testes](#avaliação-e-testes-evaluatepy)
@@ -75,6 +76,110 @@ se ele está no `PATH`:
 ```bash
 lilypond --version
 ```
+
+## O conjunto de dados PIG
+
+A avaliação, os experimentos e o ajuste dos parâmetros usam o PIG (*Piano Fingering Dataset*),
+de Nakamura, Saito e Yoshii (2020): trechos de 150 peças do repertório clássico, com 309
+dedilhados anotados nota a nota por pianistas. O conjunto **não acompanha este repositório** e
+pode ser obtido na página dos autores:
+
+**<https://beam.kisarazu.ac.jp/research/PianoFingeringDataset/>**
+
+A página leva a um cadastro para o download. O uso é permitido só para pesquisa acadêmica sem
+fins lucrativos, e os autores pedem que todo trabalho que use o conjunto cite o artigo da lista
+de [referências](#referências). O código foi usado com a versão 1.2 (2022/5/12).
+
+Sem o PIG, o `main.py`, o `difficulty_profile.py` e quase todos os testes funcionam
+normalmente. Só os modos de avaliação listados abaixo e o `otimizar.py` precisam dele.
+
+### Onde colocar os arquivos
+
+O código procura os arquivos de dedilhado nesta pasta, a partir da raiz do repositório:
+
+```
+PianoFingeringDataset_v1.2/PianoFingeringDataset_v1.2/FingeringFiles/
+```
+
+É o caminho que resulta de extrair o arquivo baixado numa pasta `PianoFingeringDataset_v1.2/`,
+já que o próprio arquivo traz uma pasta com esse nome:
+
+```bash
+unzip <arquivo-baixado>.zip -d PianoFingeringDataset_v1.2
+ls PianoFingeringDataset_v1.2/PianoFingeringDataset_v1.2/FingeringFiles | head -3
+# 001-1_fingering.txt
+# 001-2_fingering.txt
+# 001-5_fingering.txt
+```
+
+A pasta está no `.gitignore` e nunca vai para o repositório. Se os arquivos estiverem em outro
+lugar, passe o caminho da pasta `FingeringFiles` como argumento: `python evaluate.py pig
+/caminho/FingeringFiles` nos modos de avaliação, e `--root /caminho/FingeringFiles` no
+`otimizar.py`. Para conferir se o conjunto foi encontrado, rode `python evaluate.py selftest`:
+com o PIG no lugar, o teste de identidade (abaixo) deixa de ser pulado.
+
+### Como o código lê o PIG
+
+Cada arquivo `<peça>-<pianista>_fingering.txt` traz uma nota por linha, com o início e o fim em
+segundos, a altura, o canal (0 para a mão direita, 1 para a esquerda) e o dedo, negativo na mão
+esquerda. A leitura, em `src/pig_loader.py`:
+
+- agrupa num mesmo acorde as notas cujos inícios distam até 30 ms, como no artigo;
+- lê no início seguinte o fim de uma nota que passa até 30 ms dele, o legato dos arquivos MIDI,
+  que de outro modo deixaria o dedo preso no acorde seguinte;
+- usa o primeiro dedo quando o pianista indica troca de dedo sobre a nota (`3_1`);
+- lê os tempos como se a semibreve durasse 1 s, isto é, a 240 semínimas por minuto, de modo que
+  a dificuldade fica no andamento da própria peça.
+
+Um teste automático confere essa leitura de ponta a ponta: o dedilhado do primeiro pianista,
+passado pelos mesmos passos de uma execução real, precisa acertar 100% contra si mesmo em
+todas as 150 peças.
+
+### Treino e teste
+
+As peças 001 a 030 (dez de Bach, dez de Mozart e dez de Chopin, cada uma com quatro a seis
+dedilhados) são o conjunto de teste de Nakamura, Saito e Yoshii (2020). Elas nunca entram no
+ajuste dos parâmetros, que usa só as 120 restantes (031 a 150). Os resultados comparados com os
+pianistas devem vir das 30 de teste (`--pieces test-30` ou `--subset test-30`).
+
+### Experimentos com o PIG
+
+| Comando | O que faz |
+|---|---|
+| `python evaluate.py pig --assigner joint-full` | Dedilha as peças com uma variante (`split`, `joint-local`, `joint-full`) ou uma referência: `fixed`, a fronteira fixa no dó central, e `oracle`, que recebe as mãos do primeiro pianista e só escolhe os dedos. Mede as taxas de correspondência de Nakamura, Saito e Yoshii ($M_{gen}$, $M_{high}$, $M_{soft}$, $M_{rec}$), as mesmas taxas com mão e dedo ($S_{gen}$ etc.), a acurácia de mão, o custo, a dificuldade e o tempo. |
+| `python evaluate.py agreement` | Compara os pianistas entre si pelas mesmas taxas: a referência humana. |
+| `python evaluate.py reduction` | Reduz as 30 peças de teste até os tetos, só com edições de notas e com edições e andamento, e mede a eficácia e a fidelidade com cada variante. |
+| `python evaluate.py beamgap` | Compara o `joint-full` com e sem o feixe nos 16 primeiros instantes de cada peça. |
+| `python evaluate.py compare A.json B.json --subset test-30` | Compara duas execuções peça a peça: diferença média com intervalo de 95% de confiança, teste de Wilcoxon e correção de Holm. |
+
+Opções do modo `pig`:
+
+| Opção | O que faz |
+|---|---|
+| `--pieces test-30` | Só as 30 peças de teste (o padrão é `all`, as 150) |
+| `--repeats 3` | Repete cada peça e registra a mediana dos tempos |
+| `--beam 128` | Muda o feixe do `joint-full` (padrão 32) |
+| `--limits parncutt` | Usa os limites de abertura do polegar do artigo de Parncutt et al. |
+| `--remove-finger R4` | Tira um dedo de uma mão (aqui, o anelar da direita); exige `joint-local` ou `joint-full` |
+
+Os experimentos do Capítulo 5 do TCC são, em resumo:
+
+```bash
+for a in split joint-local joint-full fixed oracle; do
+  python evaluate.py pig --assigner $a --repeats 3 --out output/cap5/pig_$a
+done
+python evaluate.py agreement --out output/cap5/agreement
+python evaluate.py reduction --out output/cap5/reduction
+python evaluate.py beamgap   --out output/cap5/beamgap
+python evaluate.py pig --assigner joint-full --beam 128 --pieces test-30 --out output/cap5/pig_joint-full_feixe128
+python evaluate.py pig --assigner joint-full --limits parncutt --out output/cap5/pig_joint-full_parncutt
+python evaluate.py pig --assigner joint-full --remove-finger R4 --out output/cap5/pig_joint-full_semR4
+python evaluate.py compare output/cap5/pig_split.json output/cap5/pig_joint-full.json --subset test-30
+```
+
+Os tempos do TCC foram medidos com um processo por vez, preso a um núcleo (`taskset -c 0`), com
+o aumento automático de frequência desligado. O `.meta.json` de cada execução registra essas
+condições.
 
 ## Dedilhar uma peça: `main.py`
 
@@ -163,7 +268,8 @@ python evaluate.py <modo> [opções]
 |---|---|
 | `selftest` | Testes automáticos em exemplos pequenos (abaixo) |
 | `ablation` | Cruza redução, variante de atribuição e busca num arquivo MIDI |
-| `beamgap` | Mede quanto a busca em feixe do `joint-full` perde para a busca exata |
+| `beamgap` | Mede quanto a busca em feixe do `joint-full` perde para a busca exata, no PIG ou num arquivo MIDI |
+| `pig`, `agreement`, `reduction`, `compare` | Avaliação no PIG (veja [O conjunto de dados PIG](#o-conjunto-de-dados-pig)) |
 
 Os modos que produzem dados gravam uma tabela em CSV e em JSON na pasta `output/`. Ao lado de
 cada tabela fica um `.meta.json` com a impressão digital do código (um hash do `evaluate.py` e de
@@ -188,26 +294,29 @@ Os testes conferem, entre outras coisas:
 - que um acorde impossível já no primeiro instante falha de forma controlada;
 - um dueto a quatro mãos, com uma das mãos limitada a três dedos, do início ao fim.
 
-Um último teste depende de um conjunto de dados que não acompanha o repositório; sem ele, o
-teste é pulado e os outros rodam normalmente.
+Dois testes usam o PIG, que não acompanha o repositório: o de identidade da leitura e a parte do
+teste do ajuste que confere que as peças de teste ficam de fora. Sem o PIG, eles são pulados e os
+outros rodam normalmente.
 
 ### Experimentos
 
 ```bash
 python evaluate.py ablation [arquivo.mid] [--slice 120] [--max-dfs 80]
-python evaluate.py beamgap  [arquivo.mid] [--length 16] [--stride 50]
+python evaluate.py beamgap  [pasta do PIG ou arquivo.mid] [--length 16] [--stride 50]
 ```
 
 As buscas em profundidade (`dynamic` e `graph`) são exponenciais. Por isso, o `ablation` lê só
 as primeiras `--slice` camadas e pula essas buscas quando a parte de uma mão passa de
 `--max-dfs` camadas. O `beamgap` compara o `joint-full` com e sem o feixe em trechos curtos
-(`--length` instantes, um a cada `--stride`), porque a busca sem feixe também é exponencial.
+(`--length` instantes), porque a busca sem feixe também é exponencial. No PIG, o padrão, o trecho
+é o começo de cada peça; num arquivo MIDI, é um trecho a cada `--stride` instantes.
 
 ## Otimização dos parâmetros: `otimizar.py`
 
 Alguns números do modelo não vêm de nenhuma fonte e foram escolhidos neste trabalho. O
 `otimizar.py` ajusta os que mudam o dedilhado ou a divisão entre as mãos, usando só as 120
-peças do PIG que ficam fora do conjunto de teste (031 a 150). As peças 001 a 030, o conjunto
+peças do PIG que ficam fora do conjunto de teste (031 a 150), e por isso precisa do PIG
+(veja [O conjunto de dados PIG](#o-conjunto-de-dados-pig)). As peças 001 a 030, o conjunto
 de teste de Nakamura, Saito e Yoshii (2020), nunca entram no ajuste.
 
 ```bash
